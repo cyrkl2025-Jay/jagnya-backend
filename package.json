@@ -1,0 +1,13 @@
+{
+  "name": "universal-video-downloader",
+  "version": "1.0.0",
+  "description": "Multi-platform video downloader for YouTube, Instagram, and Facebook supporting full quality up to 4K",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}
