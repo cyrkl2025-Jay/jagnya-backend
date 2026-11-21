@@ -2,16 +2,145 @@ let currentVideoData = null;
 let activePollingInterval = null;
 let deferredPrompt = null;
 
-// Register Service Worker for PWA & Share Target
-if ('serviceWorker' in navigator) {
+const DEFAULT_ENGINE_URL = 'https://simulations-inspections-containers-wine.trycloudflare.com';
+const LOCAL_LAN_URL = 'http://192.168.0.105:5000';
+
+function getEngineBaseUrl() {
+  const custom = localStorage.getItem('downloader_engine_url');
+  if (custom && custom.trim().length > 0) {
+    return custom.trim().replace(/\/+$/, '');
+  }
+  if (window.location.protocol.startsWith('http')) {
+    return ''; // Relative path when served from Express
+  }
+  return DEFAULT_ENGINE_URL;
+}
+
+function getApiUrl(path) {
+  const base = getEngineBaseUrl();
+  return base ? `${base}${path}` : path;
+}
+
+async function checkEngineHealth() {
+  const dot = document.getElementById('statusDot');
+  const label = document.getElementById('engineStatusLabel');
+  if (!dot || !label) return;
+
+  const base = getEngineBaseUrl();
+  const testUrl = (base ? base : '') + '/api/info';
+
+  try {
+    // Quick probe with OPTIONS or GET to see if engine responds
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+    const res = await fetch((base ? base : '') + '/manifest.json', {
+      method: 'GET',
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+
+    if (res.ok) {
+      dot.className = 'status-dot online';
+      label.textContent = 'Engine Online';
+      return true;
+    }
+  } catch (e) {
+    // If default cloudflare failed and on file:, try fallback to local LAN IP
+    if (window.location.protocol === 'file:' && !localStorage.getItem('downloader_engine_url')) {
+      try {
+        const controller2 = new AbortController();
+        const timeoutId2 = setTimeout(() => controller2.abort(), 2000);
+        const res2 = await fetch(LOCAL_LAN_URL + '/manifest.json', { signal: controller2.signal });
+        clearTimeout(timeoutId2);
+        if (res2.ok) {
+          localStorage.setItem('downloader_engine_url', LOCAL_LAN_URL);
+          dot.className = 'status-dot online';
+          label.textContent = 'LAN Online';
+          return true;
+        }
+      } catch (ignored) {}
+    }
+  }
+
+  dot.className = 'status-dot offline';
+  label.textContent = 'Offline (Tap)';
+  return false;
+}
+
+function openEngineSettings() {
+  const modal = document.getElementById('engineModal');
+  const input = document.getElementById('engineUrlInput');
+  const status = document.getElementById('engineTestStatus');
+  if (modal && input) {
+    input.value = localStorage.getItem('downloader_engine_url') || (window.location.protocol.startsWith('http') ? window.location.origin : DEFAULT_ENGINE_URL);
+    if (status) status.textContent = '';
+    modal.style.display = 'flex';
+  }
+}
+
+function closeEngineSettings() {
+  const modal = document.getElementById('engineModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function saveEngineSettings() {
+  const input = document.getElementById('engineUrlInput');
+  const status = document.getElementById('engineTestStatus');
+  let val = input ? input.value.trim().replace(/\/+$/, '') : '';
+  if (val && !val.startsWith('http://') && !val.startsWith('https://')) {
+    val = 'http://' + val;
+  }
+  if (status) status.textContent = 'Testing connection...';
+
+  try {
+    const res = await fetch(val + '/manifest.json');
+    if (res.ok) {
+      localStorage.setItem('downloader_engine_url', val);
+      if (status) {
+        status.style.color = '#10b981';
+        status.textContent = '✅ Connected successfully!';
+      }
+      setTimeout(() => {
+        closeEngineSettings();
+        checkEngineHealth();
+      }, 700);
+      return;
+    }
+  } catch (err) {
+    if (status) {
+      status.style.color = '#ef4444';
+      status.textContent = '❌ Failed to reach engine: ' + err.message;
+    }
+  }
+}
+
+function resetEngineSettings() {
+  localStorage.removeItem('downloader_engine_url');
+  const input = document.getElementById('engineUrlInput');
+  if (input) input.value = DEFAULT_ENGINE_URL;
+  saveEngineSettings();
+}
+
+// Global hook called directly from Android MainActivity on Share intent
+window.onSharedUrlReceived = function (url) {
+  if (!url) return;
+  const urlInput = document.getElementById('videoUrl');
+  if (urlInput) {
+    urlInput.value = url.trim();
+    handleInputChange();
+    setTimeout(() => {
+      handleFetchInfo();
+    }, 150);
+  }
+};
+
+// Register Service Worker for PWA
+if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js')
-      .then((reg) => {
-        console.log('Service Worker registered successfully:', reg.scope);
-      })
-      .catch((err) => {
-        console.error('Service Worker registration failed:', err);
-      });
+      .then((reg) => console.log('SW scope:', reg.scope))
+      .catch((err) => console.warn('SW error:', err));
   });
 }
 
@@ -27,19 +156,17 @@ async function handleInstallApp() {
   if (!deferredPrompt) return;
   deferredPrompt.prompt();
   const { outcome } = await deferredPrompt.userChoice;
-  console.log(`User response to install prompt: ${outcome}`);
   deferredPrompt = null;
   const installBtn = document.getElementById('btnInstallApp');
   if (installBtn) installBtn.style.display = 'none';
 }
 
 window.addEventListener('appinstalled', () => {
-  console.log('PWA was installed successfully');
   const installBtn = document.getElementById('btnInstallApp');
   if (installBtn) installBtn.style.display = 'none';
 });
 
-// Handle incoming Shared Links from Android/Desktop Share Sheet
+// Handle incoming Shared Links from Web Share Target
 function handleIncomingShareTarget() {
   const urlParams = new URLSearchParams(window.location.search);
   const sharedUrl = urlParams.get('url');
@@ -47,41 +174,29 @@ function handleIncomingShareTarget() {
   const sharedTitle = urlParams.get('title');
 
   let extractedUrl = null;
-
-  // Check URL param first
   if (sharedUrl && sharedUrl.startsWith('http')) {
     extractedUrl = sharedUrl.trim();
   } else if (sharedText) {
-    // Look for URL inside shared text (e.g., YouTube app shares "Check out this video: https://youtu.be/...")
     const match = sharedText.match(/(https?:\/\/[^\s]+)/i);
-    if (match) {
-      extractedUrl = match[1].trim();
-    }
+    if (match) extractedUrl = match[1].trim();
   } else if (sharedTitle) {
     const match = sharedTitle.match(/(https?:\/\/[^\s]+)/i);
-    if (match) {
-      extractedUrl = match[1].trim();
-    }
+    if (match) extractedUrl = match[1].trim();
   }
 
   if (extractedUrl) {
-    const urlInput = document.getElementById('videoUrl');
-    urlInput.value = extractedUrl;
-
-    // Clean URL bar to avoid re-triggering on manual refresh
+    window.onSharedUrlReceived(extractedUrl);
     if (window.history && window.history.replaceState) {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
-
-    // Automatically analyze the shared link
-    setTimeout(() => {
-      handleFetchInfo();
-    }, 200);
   }
 }
 
-// Check for shared links when the page loads
-window.addEventListener('DOMContentLoaded', handleIncomingShareTarget);
+window.addEventListener('DOMContentLoaded', () => {
+  handleIncomingShareTarget();
+  checkEngineHealth();
+  setInterval(checkEngineHealth, 15000);
+});
 
 function handleInputChange() {
   const urlInput = document.getElementById('videoUrl');
@@ -145,7 +260,8 @@ async function handleFetchInfo(event) {
   progressSection.style.display = 'none';
 
   try {
-    const res = await fetch('/api/info', {
+    const apiUrl = getApiUrl('/api/info');
+    const res = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url })
@@ -159,7 +275,8 @@ async function handleFetchInfo(event) {
     currentVideoData = data;
     renderMediaPreview(data);
   } catch (err) {
-    showError(err.message);
+    showError(err.message + ' (Make sure Engine server is online)');
+    checkEngineHealth();
   } finally {
     btnText.textContent = 'Analyze Link';
     btnSpinner.style.display = 'none';
@@ -241,7 +358,8 @@ function renderMediaPreview(data) {
       const card = document.createElement('div');
       card.className = 'image-card';
       const safeTitle = encodeURIComponent(data.title || `image-${idx + 1}`);
-      const downloadUrl = `/api/download-image?url=${encodeURIComponent(img.url)}&filename=${safeTitle}&ext=${img.ext || 'jpg'}`;
+      const downloadPath = `/api/download-image?url=${encodeURIComponent(img.url)}&filename=${safeTitle}&ext=${img.ext || 'jpg'}`;
+      const fullDownloadUrl = getApiUrl(downloadPath);
 
       card.innerHTML = `
         <div class="image-card-thumb-wrap">
@@ -250,7 +368,7 @@ function renderMediaPreview(data) {
         <div class="image-card-body">
           <div class="image-card-title">${img.label}</div>
           <div class="image-card-res">${img.resolution}</div>
-          <a class="btn-download-img" href="${downloadUrl}" download>
+          <a class="btn-download-img" href="${fullDownloadUrl}" download>
             ⬇️ Download Image (${(img.ext || 'jpg').toUpperCase()})
           </a>
         </div>
@@ -290,7 +408,8 @@ async function startDownload(option) {
   }
 
   try {
-    const res = await fetch('/api/download', {
+    const downloadApiUrl = getApiUrl('/api/download');
+    const res = await fetch(downloadApiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -309,7 +428,7 @@ async function startDownload(option) {
 
     activePollingInterval = setInterval(async () => {
       try {
-        const statusRes = await fetch(`/api/progress/${jobId}`);
+        const statusRes = await fetch(getApiUrl(`/api/progress/${jobId}`));
         if (!statusRes.ok) return;
 
         const job = await statusRes.json();
@@ -328,7 +447,7 @@ async function startDownload(option) {
           speedText.textContent = 'Done!';
           etaText.textContent = '';
 
-          const fileUrl = `/api/file/${jobId}`;
+          const fileUrl = getApiUrl(`/api/file/${jobId}`);
           const saveBtn = document.getElementById('btnSaveFile');
           saveBtn.href = fileUrl;
           readyBox.style.display = 'flex';

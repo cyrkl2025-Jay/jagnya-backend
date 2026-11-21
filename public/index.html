@@ -14,6 +14,10 @@
     <header>
       <div style="display: flex; justify-content: center; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;">
         <div class="brand-badge" style="margin-bottom: 0;">⚡ Video & High-Res Image Downloader</div>
+        <button id="btnEngineStatus" class="engine-badge-btn" onclick="openEngineSettings()" title="Click to configure backend engine">
+          <span class="status-dot" id="statusDot"></span>
+          <span id="engineStatusLabel">Connecting...</span>
+        </button>
         <button id="btnInstallApp" class="btn-install-pwa" style="display: none;" onclick="handleInstallApp()">
           📲 Install App / Add to Share Menu
         </button>
@@ -152,6 +156,27 @@
     <footer>
       <p>Universal Video & Image Downloader &bull; Built with Node.js & yt-dlp &bull; For personal backup and offline viewing</p>
     </footer>
+  </div>
+
+  <!-- Engine Connection Modal -->
+  <div id="engineModal" class="engine-modal" style="display:none;">
+    <div class="engine-modal-content">
+      <div class="engine-modal-header">
+        <h3>⚙️ Downloader Engine</h3>
+        <button class="btn-close" onclick="closeEngineSettings()">✕</button>
+      </div>
+      <p class="engine-modal-desc">
+        Configure the backend engine server address (Wi-Fi IP or Cloudflare tunnel URL):
+      </p>
+      <div style="margin-bottom: 12px;">
+        <input type="text" id="engineUrlInput" class="input-box" style="width: 100%; font-size: 0.9rem;" placeholder="e.g. https://... or http://192.168.0.105:5000" />
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button class="glass-action-btn analyze-btn" style="flex: 1; padding: 10px;" onclick="saveEngineSettings()">Save & Connect</button>
+        <button class="glass-action-btn paste-btn" style="padding: 10px 14px;" onclick="resetEngineSettings()">Reset</button>
+      </div>
+      <div id="engineTestStatus" style="margin-top: 10px; font-size: 0.85rem; color: #94a3b8; text-align: center;"></div>
+    </div>
   </div>
 
   <script src="app.js"></script>

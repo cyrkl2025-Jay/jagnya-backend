@@ -17,3 +17,6 @@ android/app/build/
 android/local.properties
 *.iml
 .idea/
+
+UniversalDownloader-APK/
+*.zip
