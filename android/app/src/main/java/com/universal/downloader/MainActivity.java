@@ -2,13 +2,17 @@ package com.universal.downloader;
 
 import android.app.Activity;
 import android.app.DownloadManager;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.StrictMode;
 import android.text.TextUtils;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
@@ -23,6 +27,16 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -30,10 +44,19 @@ public class MainActivity extends Activity {
 
     private WebView webView;
     private String pendingSharedUrl = null;
+    private String lastDetectedClipboardUrl = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Allow sharing file:// URIs without VmPolicy restrictions
+        try {
+            StrictMode.VmPolicy.Builder builder = new StrictMode.VmPolicy.Builder();
+            StrictMode.setVmPolicy(builder.build());
+        } catch (Exception ignored) {}
+
+        checkStoragePermissions();
 
         FrameLayout rootLayout = new FrameLayout(this);
         rootLayout.setBackgroundColor(Color.parseColor("#090D16"));
@@ -56,6 +79,54 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleIncomingIntent(intent);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        checkClipboardForMediaUrl();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            checkClipboardForMediaUrl();
+        }
+    }
+
+    private void checkClipboardForMediaUrl() {
+        try {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboard != null && clipboard.hasPrimaryClip()) {
+                ClipData clip = clipboard.getPrimaryClip();
+                if (clip != null && clip.getItemCount() > 0) {
+                    CharSequence text = clip.getItemAt(0).getText();
+                    if (text != null) {
+                        String extracted = extractUrl(text.toString());
+                        if (extracted != null && isSupportedMediaUrl(extracted)) {
+                            if (!extracted.equals(lastDetectedClipboardUrl)) {
+                                lastDetectedClipboardUrl = extracted;
+                                deliverClipboardUrlToJs(extracted);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private boolean isSupportedMediaUrl(String url) {
+        String lower = url.toLowerCase();
+        return lower.contains("youtu.be") ||
+               lower.contains("youtube.com") ||
+               lower.contains("instagram.com") ||
+               lower.contains("facebook.com") ||
+               lower.contains("fb.watch") ||
+               lower.contains("tiktok.com") ||
+               lower.contains("threads.net") ||
+               lower.contains("twitter.com") ||
+               lower.contains("x.com");
     }
 
     private void setupWebView() {
@@ -96,6 +167,8 @@ public class MainActivity extends Activity {
                 if (!TextUtils.isEmpty(pendingSharedUrl)) {
                     deliverSharedUrlToJs(pendingSharedUrl);
                     pendingSharedUrl = null;
+                } else {
+                    checkClipboardForMediaUrl();
                 }
             }
         });
@@ -159,6 +232,27 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void deliverClipboardUrlToJs(final String url) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                String safe = url.replace("'", "\\'");
+                webView.evaluateJavascript("if (window.onClipboardUrlDetected) { window.onClipboardUrlDetected('" + safe + "'); }", null);
+            }
+        });
+    }
+
+    private void checkStoragePermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{
+                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                }, 101);
+            }
+        }
+    }
+
     private String extractUrl(String text) {
         Pattern pattern = Pattern.compile("(https?://\\S+)");
         Matcher matcher = pattern.matcher(text);
@@ -187,6 +281,165 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void showToast(String toast) {
             Toast.makeText(mContext, toast, Toast.LENGTH_SHORT).show();
+        }
+
+        @JavascriptInterface
+        public void markUrlHandled(String url) {
+            lastDetectedClipboardUrl = url;
+        }
+
+        @JavascriptInterface
+        public boolean hasStoragePermission() {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+            return checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        }
+
+        @JavascriptInterface
+        public void requestStoragePermission() {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    checkStoragePermissions();
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public String getWhatsAppStatuses() {
+            JSONArray array = new JSONArray();
+            try {
+                String base = Environment.getExternalStorageDirectory().getAbsolutePath();
+                String[] possiblePaths = new String[]{
+                        base + "/Android/media/com.whatsapp/WhatsApp/Media/.Statuses",
+                        base + "/WhatsApp/Media/.Statuses",
+                        base + "/Android/media/com.whatsapp.w4b/WhatsApp Business/Media/.Statuses",
+                        base + "/WhatsApp Business/Media/.Statuses"
+                };
+
+                for (String p : possiblePaths) {
+                    File dir = new File(p);
+                    if (dir.exists() && dir.isDirectory()) {
+                        File[] files = dir.listFiles();
+                        if (files != null) {
+                            Arrays.sort(files, new Comparator<File>() {
+                                @Override
+                                public int compare(File f1, File f2) {
+                                    return Long.compare(f2.lastModified(), f1.lastModified());
+                                }
+                            });
+
+                            for (File f : files) {
+                                if (f.isFile() && f.length() > 0) {
+                                    String name = f.getName().toLowerCase();
+                                    if (name.endsWith(".mp4") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png")) {
+                                        JSONObject item = new JSONObject();
+                                        item.put("name", f.getName());
+                                        item.put("path", f.getAbsolutePath());
+                                        item.put("type", name.endsWith(".mp4") ? "video" : "image");
+                                        item.put("size", formatFileSize(f.length()));
+                                        item.put("time", f.lastModified());
+                                        item.put("uri", "file://" + f.getAbsolutePath());
+                                        array.put(item);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            return array.toString();
+        }
+
+        @JavascriptInterface
+        public boolean saveStatusToGallery(String filePath) {
+            try {
+                File src = new File(filePath);
+                if (!src.exists()) {
+                    showToast("Status file no longer exists.");
+                    return false;
+                }
+
+                boolean isVideo = src.getName().toLowerCase().endsWith(".mp4");
+                File destDir = new File(
+                        Environment.getExternalStoragePublicDirectory(isVideo ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES),
+                        "WhatsApp Status"
+                );
+                if (!destDir.exists()) destDir.mkdirs();
+
+                File destFile = new File(destDir, src.getName());
+                copyFile(src, destFile);
+
+                MediaScannerConnection.scanFile(
+                        MainActivity.this,
+                        new String[]{destFile.getAbsolutePath()},
+                        new String[]{isVideo ? "video/mp4" : "image/jpeg"},
+                        null
+                );
+
+                showToast("✅ Saved to Gallery (" + (isVideo ? "Movies" : "Pictures") + "/WhatsApp Status)!");
+                return true;
+            } catch (Exception e) {
+                showToast("Save failed: " + e.getMessage());
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public void shareStatus(String filePath) {
+            try {
+                File file = new File(filePath);
+                if (!file.exists()) {
+                    showToast("File does not exist");
+                    return;
+                }
+                boolean isVideo = file.getName().toLowerCase().endsWith(".mp4");
+                Intent shareIntent = new Intent(Intent.ACTION_SEND);
+                shareIntent.setType(isVideo ? "video/mp4" : "image/jpeg");
+                Uri fileUri = Uri.parse("file://" + file.getAbsolutePath());
+                shareIntent.putExtra(Intent.EXTRA_STREAM, fileUri);
+                shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                Intent chooser = Intent.createChooser(shareIntent, "Share WhatsApp Status");
+                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(chooser);
+            } catch (Exception e) {
+                showToast("Share failed: " + e.getMessage());
+            }
+        }
+
+        @JavascriptInterface
+        public void openWhatsApp() {
+            try {
+                Intent intent = getPackageManager().getLaunchIntentForPackage("com.whatsapp");
+                if (intent == null) {
+                    intent = getPackageManager().getLaunchIntentForPackage("com.whatsapp.w4b");
+                }
+                if (intent != null) {
+                    startActivity(intent);
+                } else {
+                    showToast("WhatsApp is not installed on this device.");
+                }
+            } catch (Exception e) {
+                showToast("Could not launch WhatsApp: " + e.getMessage());
+            }
+        }
+
+        private String formatFileSize(long bytes) {
+            if (bytes <= 0) return "0 B";
+            final String[] units = new String[]{"B", "KB", "MB", "GB"};
+            int digitGroups = (int) (Math.log10(bytes) / Math.log10(1024));
+            return String.format(java.util.Locale.US, "%.1f %s", bytes / Math.pow(1024, digitGroups), units[digitGroups]);
+        }
+
+        private void copyFile(File src, File dst) throws java.io.IOException {
+            try (InputStream in = new FileInputStream(src); OutputStream out = new FileOutputStream(dst)) {
+                byte[] buf = new byte[8192];
+                int len;
+                while ((len = in.read(buf)) > 0) {
+                    out.write(buf, 0, len);
+                }
+            }
         }
     }
 }

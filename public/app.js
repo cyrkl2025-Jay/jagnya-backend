@@ -2,18 +2,24 @@ let currentVideoData = null;
 let activePollingInterval = null;
 let deferredPrompt = null;
 
-const DEFAULT_ENGINE_URL = 'https://simulations-inspections-containers-wine.trycloudflare.com';
-const LOCAL_LAN_URL = 'http://192.168.0.105:5000';
+const CANDIDATE_URLS = [
+  'https://petroleum-naturals-pushing-institute.trycloudflare.com',
+  'http://192.168.0.105:5000',
+  'http://192.168.0.102:5000'
+];
+
+let activeEngineBase = '';
 
 function getEngineBaseUrl() {
   const custom = localStorage.getItem('downloader_engine_url');
   if (custom && custom.trim().length > 0) {
     return custom.trim().replace(/\/+$/, '');
   }
+  if (activeEngineBase) return activeEngineBase;
   if (window.location.protocol.startsWith('http')) {
-    return ''; // Relative path when served from Express
+    return ''; // Relative path when served directly from Express
   }
-  return DEFAULT_ENGINE_URL;
+  return CANDIDATE_URLS[0];
 }
 
 function getApiUrl(path) {
@@ -21,51 +27,61 @@ function getApiUrl(path) {
   return base ? `${base}${path}` : path;
 }
 
+async function testCandidate(url) {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(url + '/manifest.json', { signal: controller.signal });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
 async function checkEngineHealth() {
   const dot = document.getElementById('statusDot');
   const label = document.getElementById('engineStatusLabel');
-  if (!dot || !label) return;
 
-  const base = getEngineBaseUrl();
-  const testUrl = (base ? base : '') + '/api/info';
+  // Check saved custom URL first
+  const custom = localStorage.getItem('downloader_engine_url');
+  if (custom && await testCandidate(custom)) {
+    activeEngineBase = custom;
+    if (dot) dot.className = 'status-dot online';
+    if (label) label.textContent = 'Engine Online';
+    return true;
+  }
 
-  try {
-    // Quick probe with OPTIONS or GET to see if engine responds
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 4000);
-
-    const res = await fetch((base ? base : '') + '/manifest.json', {
-      method: 'GET',
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
-    if (res.ok) {
-      dot.className = 'status-dot online';
-      label.textContent = 'Engine Online';
+  // If on web (http), check relative
+  if (window.location.protocol.startsWith('http')) {
+    if (await testCandidate('')) {
+      activeEngineBase = '';
+      if (dot) dot.className = 'status-dot online';
+      if (label) label.textContent = 'Engine Online';
       return true;
-    }
-  } catch (e) {
-    // If default cloudflare failed and on file:, try fallback to local LAN IP
-    if (window.location.protocol === 'file:' && !localStorage.getItem('downloader_engine_url')) {
-      try {
-        const controller2 = new AbortController();
-        const timeoutId2 = setTimeout(() => controller2.abort(), 2000);
-        const res2 = await fetch(LOCAL_LAN_URL + '/manifest.json', { signal: controller2.signal });
-        clearTimeout(timeoutId2);
-        if (res2.ok) {
-          localStorage.setItem('downloader_engine_url', LOCAL_LAN_URL);
-          dot.className = 'status-dot online';
-          label.textContent = 'LAN Online';
-          return true;
-        }
-      } catch (ignored) {}
     }
   }
 
-  dot.className = 'status-dot offline';
-  label.textContent = 'Offline (Tap)';
+  // Loop through candidates to auto-discover
+  for (const candidate of CANDIDATE_URLS) {
+    if (await testCandidate(candidate)) {
+      activeEngineBase = candidate;
+      localStorage.setItem('downloader_engine_url', candidate);
+      if (dot) dot.className = 'status-dot online';
+      if (label) label.textContent = 'Engine Online';
+      return true;
+    }
+  }
+
+  if (dot) dot.className = 'status-dot offline';
+  if (label) label.textContent = 'Offline (Tap)';
   return false;
+}
+
+function selectPreset(url) {
+  const input = document.getElementById('engineUrlInput');
+  if (input) input.value = url;
+  saveEngineSettings();
 }
 
 function openEngineSettings() {
@@ -73,7 +89,7 @@ function openEngineSettings() {
   const input = document.getElementById('engineUrlInput');
   const status = document.getElementById('engineTestStatus');
   if (modal && input) {
-    input.value = localStorage.getItem('downloader_engine_url') || (window.location.protocol.startsWith('http') ? window.location.origin : DEFAULT_ENGINE_URL);
+    input.value = localStorage.getItem('downloader_engine_url') || activeEngineBase || CANDIDATE_URLS[0];
     if (status) status.textContent = '';
     modal.style.display = 'flex';
   }
@@ -194,9 +210,37 @@ function handleIncomingShareTarget() {
 
 window.addEventListener('DOMContentLoaded', () => {
   handleIncomingShareTarget();
+  initSpeedBooster();
   checkEngineHealth();
   setInterval(checkEngineHealth, 15000);
 });
+
+function isSpeedBoosterEnabled() {
+  return localStorage.getItem('downloader_speed_booster') !== 'false';
+}
+
+function initSpeedBooster() {
+  const chk = document.getElementById('chkSpeedBooster');
+  const bar = document.getElementById('boosterBar');
+  const enabled = isSpeedBoosterEnabled();
+  if (chk) chk.checked = enabled;
+  if (bar) {
+    if (enabled) bar.classList.add('active');
+    else bar.classList.remove('active');
+  }
+}
+
+function toggleSpeedBooster(forceVal) {
+  const chk = document.getElementById('chkSpeedBooster');
+  const bar = document.getElementById('boosterBar');
+  const nextVal = typeof forceVal === 'boolean' ? forceVal : !(chk ? chk.checked : true);
+  if (chk) chk.checked = nextVal;
+  localStorage.setItem('downloader_speed_booster', nextVal ? 'true' : 'false');
+  if (bar) {
+    if (nextVal) bar.classList.add('active');
+    else bar.classList.remove('active');
+  }
+}
 
 function handleInputChange() {
   const urlInput = document.getElementById('videoUrl');
@@ -258,6 +302,10 @@ async function handleFetchInfo(event) {
   btnAnalyze.disabled = true;
   previewSection.style.display = 'none';
   progressSection.style.display = 'none';
+  const playlistSection = document.getElementById('playlistSection');
+  if (playlistSection) playlistSection.style.display = 'none';
+  const carouselSection = document.getElementById('carouselSection');
+  if (carouselSection) carouselSection.style.display = 'none';
 
   try {
     const apiUrl = getApiUrl('/api/info');
@@ -273,7 +321,13 @@ async function handleFetchInfo(event) {
     }
 
     currentVideoData = data;
-    renderMediaPreview(data);
+    if (data.isCarousel) {
+      renderCarouselView(data);
+    } else if (data.isPlaylist) {
+      renderPlaylistView(data);
+    } else {
+      renderMediaPreview(data);
+    }
   } catch (err) {
     showError(err.message + ' (Make sure Engine server is online)');
     checkEngineHealth();
@@ -285,6 +339,10 @@ async function handleFetchInfo(event) {
 }
 
 function renderMediaPreview(data) {
+  const carouselSection = document.getElementById('carouselSection');
+  if (carouselSection) carouselSection.style.display = 'none';
+  const playlistSection = document.getElementById('playlistSection');
+  if (playlistSection) playlistSection.style.display = 'none';
   const previewSection = document.getElementById('previewSection');
   const thumb = document.getElementById('videoThumb');
   const duration = document.getElementById('videoDuration');
@@ -347,6 +405,17 @@ function renderMediaPreview(data) {
     audioSection.style.display = 'none';
   }
 
+  // Setup Trim & Clip Tool for videos
+  const trimSection = document.getElementById('trimSection');
+  if (trimSection) {
+    if (data.options && data.options.video && data.options.video.length > 0) {
+      trimSection.style.display = 'block';
+      resetTrim();
+    } else {
+      trimSection.style.display = 'none';
+    }
+  }
+
   // Render High-Res Images & Covers
   const imageSection = document.getElementById('imageSection');
   const imageGrid = document.getElementById('imageGrid');
@@ -396,7 +465,14 @@ async function startDownload(option) {
 
   progressSection.style.display = 'block';
   readyBox.style.display = 'none';
-  statusText.textContent = 'Initializing download...';
+
+  const boosterOn = isSpeedBoosterEnabled();
+  const turboBadge = document.getElementById('turboProgressBadge');
+  if (turboBadge) turboBadge.style.display = boosterOn ? 'inline-flex' : 'none';
+
+  statusText.textContent = isTrimActive
+    ? 'Trimming & preparing highlight clip...'
+    : (boosterOn ? 'Accelerating stream with 16 parallel threads...' : 'Initializing download...');
   percentText.textContent = '0%';
   barFill.style.width = '0%';
   speedText.textContent = 'Speed: --';
@@ -408,17 +484,27 @@ async function startDownload(option) {
   }
 
   try {
+    const downloadPayload = {
+      url: currentVideoData.url,
+      optionId: option.id,
+      type: option.type,
+      height: option.height || null,
+      format: option.format,
+      speedBooster: boosterOn
+    };
+
+    if (isTrimActive) {
+      const startInput = document.getElementById('trimStartTime');
+      const endInput = document.getElementById('trimEndTime');
+      if (startInput && startInput.value.trim()) downloadPayload.trimStart = startInput.value.trim();
+      if (endInput && endInput.value.trim()) downloadPayload.trimEnd = endInput.value.trim();
+    }
+
     const downloadApiUrl = getApiUrl('/api/download');
     const res = await fetch(downloadApiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        url: currentVideoData.url,
-        optionId: option.id,
-        type: option.type,
-        height: option.height || null,
-        format: option.format
-      })
+      body: JSON.stringify(downloadPayload)
     });
 
     const data = await res.json();
@@ -469,5 +555,692 @@ async function startDownload(option) {
     }, 800);
   } catch (err) {
     showError(err.message);
+  }
+}
+
+
+// ============================================
+// Auto-Clipboard Detection
+// ============================================
+let detectedClipboardUrl = null;
+let lastDismissedUrl = null;
+
+function isMediaUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const lower = url.toLowerCase().trim();
+  return lower.includes('youtu.be/') ||
+         lower.includes('youtube.com/') ||
+         lower.includes('instagram.com/') ||
+         lower.includes('facebook.com/') ||
+         lower.includes('fb.watch/') ||
+         lower.includes('tiktok.com/') ||
+         lower.includes('threads.net/') ||
+         lower.includes('twitter.com/') ||
+         lower.includes('x.com/') ||
+         lower.includes('vimeo.com/');
+}
+
+window.onClipboardUrlDetected = function(url) {
+  if (!url) return;
+  url = url.trim();
+  if (url === lastDismissedUrl) return;
+
+  const currentInput = document.getElementById('videoUrl') ? document.getElementById('videoUrl').value.trim() : '';
+  if (currentInput === url) return;
+
+  detectedClipboardUrl = url;
+  const banner = document.getElementById('clipboardBanner');
+  const urlDisplay = document.getElementById('clipboardDetectedUrl');
+  if (banner && urlDisplay) {
+    urlDisplay.textContent = url;
+    banner.style.display = 'block';
+  }
+};
+
+function acceptClipboardUrl() {
+  if (!detectedClipboardUrl) return;
+  const url = detectedClipboardUrl;
+  const urlInput = document.getElementById('videoUrl');
+  if (urlInput) {
+    urlInput.value = url;
+    handleInputChange();
+  }
+  dismissClipboardBanner();
+  handleFetchInfo();
+}
+
+function dismissClipboardBanner() {
+  const banner = document.getElementById('clipboardBanner');
+  if (banner) {
+    banner.classList.add('slide-out');
+    setTimeout(() => {
+      banner.style.display = 'none';
+      banner.classList.remove('slide-out');
+    }, 240);
+  }
+  lastDismissedUrl = detectedClipboardUrl;
+  detectedClipboardUrl = null;
+}
+
+// Auto-check clipboard when browser / web app tab gains focus
+async function checkBrowserClipboard() {
+  if (!navigator.clipboard || !navigator.clipboard.readText) return;
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      const match = text.match(/(https?:\/\/[^\s]+)/i);
+      if (match) {
+        const foundUrl = match[1].trim();
+        if (isMediaUrl(foundUrl)) {
+          window.onClipboardUrlDetected(foundUrl);
+        }
+      }
+    }
+  } catch (ignored) {
+    // Clipboard permission not granted or backgrounded
+  }
+}
+
+window.addEventListener('focus', checkBrowserClipboard);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    checkBrowserClipboard();
+  }
+});
+
+
+// ============================================
+// Trim & Clip Feature Helpers
+// ============================================
+let isTrimActive = false;
+
+function toggleTrimCollapse() {
+  const body = document.getElementById('trimBody');
+  const toggleBtn = document.getElementById('btnTrimToggle');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'flex' : 'none';
+  if (toggleBtn) {
+    if (isHidden) toggleBtn.classList.add('open');
+    else toggleBtn.classList.remove('open');
+  }
+}
+
+function parseTimeToSeconds(timeStr) {
+  if (!timeStr) return null;
+  const parts = timeStr.trim().split(':').map(Number);
+  if (parts.some(isNaN)) return null;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  if (parts.length === 1) return parts[0];
+  return null;
+}
+
+function formatSecondsToTime(sec) {
+  if (isNaN(sec) || sec < 0) return '00:00:00';
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  if (h > 0) return `${pad(h)}:${pad(m)}:${pad(s)}`;
+  return `00:${pad(m)}:${pad(s)}`;
+}
+
+function updateTrimDuration() {
+  const startInput = document.getElementById('trimStartTime');
+  const endInput = document.getElementById('trimEndTime');
+  const card = document.getElementById('trimSection');
+  const badge = document.getElementById('trimStatusBadge');
+  const valDisplay = document.getElementById('trimDurationValue');
+
+  const startVal = startInput ? startInput.value.trim() : '';
+  const endVal = endInput ? endInput.value.trim() : '';
+
+  const startSec = parseTimeToSeconds(startVal);
+  const endSec = parseTimeToSeconds(endVal);
+
+  const hasStart = startSec !== null && startSec > 0;
+  const hasEnd = endSec !== null && endSec > 0 && (!currentVideoData || !currentVideoData.durationSeconds || endSec < currentVideoData.durationSeconds);
+
+  if (hasStart || hasEnd) {
+    isTrimActive = true;
+    if (badge) {
+      badge.textContent = 'Active';
+      badge.classList.add('active');
+    }
+    if (card) card.classList.add('active');
+
+    if (startSec !== null && endSec !== null && endSec > startSec) {
+      const diff = endSec - startSec;
+      if (valDisplay) valDisplay.textContent = `${formatSecondsToTime(diff)} (${startVal} to ${endVal})`;
+    } else if (startSec !== null && (!endVal || endSec === null)) {
+      if (valDisplay) valDisplay.textContent = `From ${startVal} to end`;
+    } else if (endSec !== null) {
+      if (valDisplay) valDisplay.textContent = `From start to ${endVal}`;
+    }
+  } else {
+    isTrimActive = false;
+    if (badge) {
+      badge.textContent = 'Off';
+      badge.classList.remove('active');
+    }
+    if (card) card.classList.remove('active');
+    if (valDisplay) valDisplay.textContent = 'Full Video';
+  }
+}
+
+function applyTrimPreset(startSec, endSec) {
+  const startInput = document.getElementById('trimStartTime');
+  const endInput = document.getElementById('trimEndTime');
+  if (startInput) startInput.value = formatSecondsToTime(startSec);
+  if (endInput) endInput.value = formatSecondsToTime(endSec);
+  updateTrimDuration();
+}
+
+function resetTrim() {
+  const startInput = document.getElementById('trimStartTime');
+  const endInput = document.getElementById('trimEndTime');
+  if (startInput) startInput.value = '00:00:00';
+  if (endInput) {
+    if (currentVideoData && currentVideoData.durationSeconds) {
+      endInput.value = formatSecondsToTime(currentVideoData.durationSeconds);
+    } else {
+      endInput.value = '';
+    }
+  }
+  isTrimActive = false;
+  const badge = document.getElementById('trimStatusBadge');
+  const card = document.getElementById('trimSection');
+  const valDisplay = document.getElementById('trimDurationValue');
+  if (badge) {
+    badge.textContent = 'Off';
+    badge.classList.remove('active');
+  }
+  if (card) card.classList.remove('active');
+  if (valDisplay) valDisplay.textContent = 'Full Video';
+}
+
+// ============================================
+// YouTube Playlist & Channel Downloader Logic
+// ============================================
+let currentPlaylistData = null;
+let isBatchCancelled = false;
+
+function renderPlaylistView(data) {
+  currentPlaylistData = data;
+  const carouselSection = document.getElementById('carouselSection');
+  if (carouselSection) carouselSection.style.display = 'none';
+  const playlistSection = document.getElementById('playlistSection');
+  const previewSection = document.getElementById('previewSection');
+  if (previewSection) previewSection.style.display = 'none';
+
+  const thumb = document.getElementById('playlistThumb');
+  const badge = document.getElementById('playlistBadge');
+  const title = document.getElementById('playlistTitle');
+  const uploader = document.getElementById('playlistUploader');
+  const itemsList = document.getElementById('playlistItemsList');
+  const chkSelectAll = document.getElementById('chkSelectAll');
+
+  thumb.src = data.thumbnail || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120" fill="%23334155"><rect width="200" height="120"/></svg>';
+  badge.textContent = `${data.totalCount || data.items.length} Videos`;
+  title.textContent = data.title;
+  uploader.textContent = data.uploader;
+
+  if (chkSelectAll) chkSelectAll.checked = true;
+
+  itemsList.innerHTML = '';
+  data.items.forEach((item, idx) => {
+    const card = document.createElement('div');
+    card.className = 'playlist-item-card';
+    card.id = `playlist-item-${idx}`;
+    card.innerHTML = `
+      <input type="checkbox" class="item-chk" data-index="${idx}" checked onchange="updateBatchCount()" />
+      <span class="item-index">#${item.index}</span>
+      <div class="item-thumb-wrap">
+        <img class="item-thumb" src="${item.thumbnail}" alt="" loading="lazy" />
+      </div>
+      <div class="item-details">
+        <div class="item-title" title="${item.title}">${item.title}</div>
+        <div class="item-duration">⏱️ ${item.duration}</div>
+      </div>
+      <button type="button" class="btn-item-download" onclick="downloadSinglePlaylistItem(${idx})" title="Download this video">
+        ⬇️ Download
+      </button>
+    `;
+    itemsList.appendChild(card);
+  });
+
+  updateBatchCount();
+  playlistSection.style.display = 'block';
+  playlistSection.scrollIntoView({ behavior: 'smooth' });
+}
+
+function toggleSelectAll(checked) {
+  const chks = document.querySelectorAll('.playlist-items-list .item-chk');
+  chks.forEach(chk => chk.checked = checked);
+  updateBatchCount();
+}
+
+function updateBatchCount() {
+  const chks = document.querySelectorAll('.playlist-items-list .item-chk:checked');
+  const allChks = document.querySelectorAll('.playlist-items-list .item-chk');
+  const count = chks.length;
+
+  const btnCount = document.getElementById('batchBtnCount');
+  const selectedCount = document.getElementById('playlistSelectedCount');
+  const chkSelectAll = document.getElementById('chkSelectAll');
+
+  if (btnCount) btnCount.textContent = count;
+  if (selectedCount) selectedCount.textContent = `${count} of ${allChks.length} selected`;
+  if (chkSelectAll) chkSelectAll.checked = (count === allChks.length && allChks.length > 0);
+}
+
+async function downloadSinglePlaylistItem(idx) {
+  if (!currentPlaylistData || !currentPlaylistData.items[idx]) return;
+  const item = currentPlaylistData.items[idx];
+  const urlInput = document.getElementById('videoUrl');
+  if (urlInput) {
+    urlInput.value = item.url;
+    handleInputChange();
+  }
+  handleFetchInfo();
+}
+
+async function startBatchDownload() {
+  if (!currentPlaylistData) return;
+  const chks = document.querySelectorAll('.playlist-items-list .item-chk:checked');
+  if (chks.length === 0) {
+    alert('Please select at least one video to download.');
+    return;
+  }
+
+  const selectedIndices = Array.from(chks).map(c => parseInt(c.dataset.index, 10));
+  const formatSelect = document.getElementById('batchFormatSelect');
+  const selectedFormatVal = formatSelect ? formatSelect.value : 'best_video';
+
+  let optionType = 'video';
+  let optionId = 'best_video';
+  let optionHeight = null;
+  let fileExt = 'mp4';
+
+  if (selectedFormatVal === 'video_720') {
+    optionHeight = 720;
+    optionId = 'video_720';
+  } else if (selectedFormatVal === 'best_audio') {
+    optionType = 'audio';
+    optionId = 'best_audio';
+    fileExt = 'mp3';
+  }
+
+  const progressBox = document.getElementById('batchProgressBox');
+  const progressTitle = document.getElementById('batchProgressTitle');
+  const progressPercent = document.getElementById('batchProgressPercent');
+  const barFill = document.getElementById('batchProgressBarFill');
+  const currentItemTitle = document.getElementById('batchCurrentItemTitle');
+
+  progressBox.style.display = 'block';
+  progressBox.scrollIntoView({ behavior: 'smooth' });
+  isBatchCancelled = false;
+
+  const total = selectedIndices.length;
+
+  for (let i = 0; i < total; i++) {
+    if (isBatchCancelled) {
+      currentItemTitle.textContent = 'Batch download cancelled.';
+      break;
+    }
+
+    const itemIdx = selectedIndices[i];
+    const item = currentPlaylistData.items[itemIdx];
+
+    progressTitle.textContent = `Downloading ${i + 1} of ${total}: "${item.title.slice(0, 30)}..."`;
+    const overallPct = Math.round((i / total) * 100);
+    progressPercent.textContent = `${overallPct}%`;
+    barFill.style.width = `${overallPct}%`;
+    currentItemTitle.textContent = `Processing #${item.index}: ${item.title}...`;
+
+    try {
+      const res = await fetch(getApiUrl('/api/download'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: item.url,
+          optionId: optionId,
+          type: optionType,
+          height: optionHeight,
+          format: fileExt,
+          speedBooster: isSpeedBoosterEnabled()
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed item download');
+
+      const jobId = data.jobId;
+
+      await new Promise((resolve) => {
+        const interval = setInterval(async () => {
+          if (isBatchCancelled) {
+            clearInterval(interval);
+            return resolve();
+          }
+          try {
+            const statusRes = await fetch(getApiUrl(`/api/progress/${jobId}`));
+            if (!statusRes.ok) return;
+            const job = await statusRes.json();
+
+            if (job.status === 'downloading' || job.status === 'processing') {
+              const itemPct = Math.round(job.percent || 0);
+              currentItemTitle.textContent = `Item ${i + 1}/${total} (${itemPct}%) - ${job.speed || ''}`;
+            } else if (job.status === 'completed') {
+              clearInterval(interval);
+              const fileUrl = getApiUrl(`/api/file/${jobId}`);
+              const a = document.createElement('a');
+              a.href = fileUrl;
+              a.download = job.fileName || `video-${item.index}`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              resolve();
+            } else if (job.status === 'failed') {
+              clearInterval(interval);
+              resolve();
+            }
+          } catch (e) {
+            clearInterval(interval);
+            resolve();
+          }
+        }, 1000);
+      });
+
+    } catch (itemErr) {
+      console.warn('Batch item error:', itemErr);
+    }
+  }
+
+  if (!isBatchCancelled) {
+    progressTitle.textContent = `All ${total} downloads completed!`;
+    progressPercent.textContent = '100%';
+    barFill.style.width = '100%';
+    currentItemTitle.textContent = 'Files saved to your downloads folder.';
+  }
+}
+
+function cancelBatchDownload() {
+  isBatchCancelled = true;
+}
+
+// ============================================
+// Instagram Carousel Downloader Logic
+// ============================================
+let currentCarouselData = null;
+
+function renderCarouselView(data) {
+  currentCarouselData = data;
+  const carouselSection = document.getElementById('carouselSection');
+  const previewSection = document.getElementById('previewSection');
+  const playlistSection = document.getElementById('playlistSection');
+  const progressSection = document.getElementById('progressSection');
+
+  if (previewSection) previewSection.style.display = 'none';
+  if (playlistSection) playlistSection.style.display = 'none';
+  if (progressSection) progressSection.style.display = 'none';
+
+  const title = document.getElementById('carouselTitle');
+  const uploader = document.getElementById('carouselUploader');
+  const badge = document.getElementById('carouselSlideBadge');
+  const grid = document.getElementById('carouselSlidesGrid');
+
+  if (title) title.textContent = data.title || 'Instagram Carousel';
+  if (uploader) uploader.textContent = `@${data.uploader || 'Creator'}`;
+  const totalSlides = data.totalSlides || (data.slides ? data.slides.length : 0);
+  if (badge) badge.textContent = `${totalSlides} Slide${totalSlides > 1 ? 's' : ''}`;
+
+  if (grid) {
+    grid.innerHTML = '';
+    (data.slides || []).forEach((slide) => {
+      const card = document.createElement('div');
+      card.className = 'carousel-slide-card';
+      const isVideo = slide.type === 'video';
+      const icon = isVideo ? '🎬' : '📷';
+      const typeLabel = isVideo ? 'Video' : 'Photo';
+      const dlUrl = getApiUrl(slide.downloadUrl);
+
+      card.innerHTML = `
+        <div class="carousel-slide-media">
+          <img src="${slide.thumbnail || slide.url}" alt="Slide #${slide.index}" loading="lazy" />
+          <span class="carousel-slide-num">#${slide.index}</span>
+          <span class="carousel-slide-type-badge ${isVideo ? 'video' : 'photo'}">${icon} ${typeLabel}</span>
+        </div>
+        <div class="carousel-slide-footer">
+          <a href="${dlUrl}" download="${(data.title || 'instagram')}-slide-${slide.index}.${slide.ext}" class="btn-download-slide" target="_blank">
+            ⬇️ Download ${typeLabel}
+          </a>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  if (carouselSection) {
+    carouselSection.style.display = 'block';
+    carouselSection.scrollIntoView({ behavior: 'smooth' });
+  }
+}
+
+async function downloadAllCarouselSlides() {
+  if (!currentCarouselData || !currentCarouselData.slides || currentCarouselData.slides.length === 0) return;
+  const slides = currentCarouselData.slides;
+
+  for (let i = 0; i < slides.length; i++) {
+    const slide = slides[i];
+    const dlUrl = getApiUrl(slide.downloadUrl);
+    const a = document.createElement('a');
+    a.href = dlUrl;
+    a.download = `${(currentCarouselData.title || 'instagram')}-slide-${slide.index}.${slide.ext || (slide.type === 'video' ? 'mp4' : 'jpg')}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    if (i < slides.length - 1) {
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
+}
+
+// ============================================
+// Main Tab Navigation & WhatsApp Status Saver
+// ============================================
+let currentWhatsAppStatuses = [];
+let activeStatusFilter = 'all';
+let currentPreviewStatus = null;
+
+function switchMainTab(tab) {
+  const tabDownloader = document.getElementById('tabDownloader');
+  const tabStatusSaver = document.getElementById('tabStatusSaver');
+  const contentDownloader = document.getElementById('downloaderTabContent');
+  const contentStatusSaver = document.getElementById('statusSaverTabContent');
+
+  if (tab === 'statusSaver') {
+    if (tabDownloader) tabDownloader.classList.remove('active');
+    if (tabStatusSaver) tabStatusSaver.classList.add('active');
+    if (contentDownloader) contentDownloader.style.display = 'none';
+    if (contentStatusSaver) contentStatusSaver.style.display = 'block';
+    loadWhatsAppStatuses();
+  } else {
+    if (tabStatusSaver) tabStatusSaver.classList.remove('active');
+    if (tabDownloader) tabDownloader.classList.add('active');
+    if (contentStatusSaver) contentStatusSaver.style.display = 'none';
+    if (contentDownloader) contentDownloader.style.display = 'block';
+  }
+}
+
+function openWhatsAppApp() {
+  if (window.AndroidNative && window.AndroidNative.openWhatsApp) {
+    window.AndroidNative.openWhatsApp();
+  } else {
+    window.open('https://web.whatsapp.com', '_blank');
+  }
+}
+
+function loadWhatsAppStatuses() {
+  const grid = document.getElementById('statusGrid');
+  const countBadge = document.getElementById('statusCountBadge');
+  const emptyState = document.getElementById('statusEmptyState');
+
+  if (!window.AndroidNative || !window.AndroidNative.getWhatsAppStatuses) {
+    // Running in browser outside native APK
+    if (grid) grid.innerHTML = '';
+    if (emptyState) {
+      emptyState.style.display = 'block';
+      emptyState.innerHTML = `
+        <div class="empty-icon">🟢</div>
+        <h3>Native Android Feature</h3>
+        <p class="empty-desc">
+          WhatsApp Status Saver runs directly on your Android phone through the installed APK.<br>
+          It reads viewed stories directly from your phone's hidden media storage.
+        </p>
+        <a href="${getApiUrl('/UniversalDownloader.apk')}" class="btn-open-wa" style="text-decoration: none; display: inline-block;">
+          ⬇️ Download APK to Use Status Saver
+        </a>
+      `;
+    }
+    if (countBadge) countBadge.textContent = 'App Feature';
+    return;
+  }
+
+  try {
+    if (window.AndroidNative.hasStoragePermission && !window.AndroidNative.hasStoragePermission()) {
+      if (window.AndroidNative.requestStoragePermission) {
+        window.AndroidNative.requestStoragePermission();
+      }
+    }
+
+    const jsonStr = window.AndroidNative.getWhatsAppStatuses();
+    const list = JSON.parse(jsonStr || '[]');
+    currentWhatsAppStatuses = Array.isArray(list) ? list : [];
+
+    if (countBadge) {
+      countBadge.textContent = `${currentWhatsAppStatuses.length} Status${currentWhatsAppStatuses.length === 1 ? '' : 'es'}`;
+    }
+
+    renderStatusGrid();
+  } catch (err) {
+    console.error('Failed loading statuses:', err);
+    if (grid) grid.innerHTML = '';
+    if (emptyState) emptyState.style.display = 'block';
+  }
+}
+
+function filterStatuses(type, btnEl) {
+  activeStatusFilter = type;
+  const pills = document.querySelectorAll('.status-filter-pill');
+  pills.forEach(p => p.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  renderStatusGrid();
+}
+
+function renderStatusGrid() {
+  const grid = document.getElementById('statusGrid');
+  const emptyState = document.getElementById('statusEmptyState');
+  if (!grid) return;
+
+  grid.innerHTML = '';
+  const filtered = currentWhatsAppStatuses.filter(item => {
+    if (activeStatusFilter === 'video') return item.type === 'video';
+    if (activeStatusFilter === 'image') return item.type === 'image';
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    if (emptyState) emptyState.style.display = 'block';
+    return;
+  }
+
+  if (emptyState) emptyState.style.display = 'none';
+
+  filtered.forEach((item, index) => {
+    const card = document.createElement('div');
+    card.className = 'status-item-card';
+
+    const isVideo = item.type === 'video';
+    const badgeText = isVideo ? '🎬 Video' : '📷 Photo';
+
+    card.innerHTML = `
+      <div class="status-thumb-wrap" onclick="openStatusPreview(${index})">
+        ${isVideo
+          ? `<video class="status-thumb-video" src="${item.uri}#t=0.5" preload="metadata"></video><div class="status-play-overlay">▶</div>`
+          : `<img class="status-thumb-img" src="${item.uri}" alt="${item.name}" loading="lazy" />`
+        }
+        <span class="status-type-badge">${badgeText}</span>
+        <span class="status-size-badge">${item.size || ''}</span>
+      </div>
+      <div class="status-card-actions">
+        <button type="button" class="btn-card-save" onclick="saveStatusItem('${item.path.replace(/\\/g, '\\\\')}')">
+          💾 Save
+        </button>
+        <button type="button" class="btn-card-share" onclick="shareStatusItem('${item.path.replace(/\\/g, '\\\\')}')">
+          ↗️ Share
+        </button>
+      </div>
+    `;
+
+    grid.appendChild(card);
+  });
+}
+
+function saveStatusItem(filePath) {
+  if (window.AndroidNative && window.AndroidNative.saveStatusToGallery) {
+    window.AndroidNative.saveStatusToGallery(filePath);
+  } else {
+    alert('Please open this inside the Universal Downloader Android app to save.');
+  }
+}
+
+function shareStatusItem(filePath) {
+  if (window.AndroidNative && window.AndroidNative.shareStatus) {
+    window.AndroidNative.shareStatus(filePath);
+  } else {
+    alert('Please open this inside the Universal Downloader Android app to share.');
+  }
+}
+
+function openStatusPreview(index) {
+  const item = currentWhatsAppStatuses[index];
+  if (!item) return;
+  currentPreviewStatus = item;
+
+  const modal = document.getElementById('statusPreviewModal');
+  const title = document.getElementById('statusModalTitle');
+  const mediaWrap = document.getElementById('statusModalMediaContainer');
+
+  if (title) title.textContent = item.name || 'Status Preview';
+  if (mediaWrap) {
+    mediaWrap.innerHTML = item.type === 'video'
+      ? `<video src="${item.uri}" controls autoplay style="width: 100%; max-height: 65vh;"></video>`
+      : `<img src="${item.uri}" alt="Preview" style="max-width: 100%; max-height: 65vh; object-fit: contain;" />`;
+  }
+
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeStatusPreview() {
+  const modal = document.getElementById('statusPreviewModal');
+  const mediaWrap = document.getElementById('statusModalMediaContainer');
+  if (mediaWrap) mediaWrap.innerHTML = '';
+  if (modal) modal.style.display = 'none';
+  currentPreviewStatus = null;
+}
+
+function saveCurrentPreviewStatus() {
+  if (currentPreviewStatus) {
+    saveStatusItem(currentPreviewStatus.path);
+  }
+}
+
+function shareCurrentPreviewStatus() {
+  if (currentPreviewStatus) {
+    shareStatusItem(currentPreviewStatus.path);
   }
 }

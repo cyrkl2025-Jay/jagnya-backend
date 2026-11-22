@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: jagnya-downloader
+    env: docker
+    plan: free
+    region: oregon
+    autoDeploy: true

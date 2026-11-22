@@ -14,7 +14,16 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const BIN_DIR = path.join(__dirname, 'bin');
-const YTDLP_BIN = path.join(BIN_DIR, 'yt-dlp.exe');
+
+function getYtDlpLocation() {
+  const localExe = path.join(BIN_DIR, 'yt-dlp.exe');
+  if (fs.existsSync(localExe)) return localExe;
+  const localBin = path.join(BIN_DIR, 'yt-dlp');
+  if (fs.existsSync(localBin)) return localBin;
+  return 'yt-dlp';
+}
+
+const YTDLP_BIN = getYtDlpLocation();
 const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
 
 if (!fs.existsSync(DOWNLOADS_DIR)) {
@@ -26,7 +35,7 @@ const jobs = new Map();
 
 // Helper to locate FFmpeg
 function getFFmpegLocation() {
-  const localFFmpeg = path.join(BIN_DIR, 'ffmpeg.exe');
+  const localFFmpeg = path.join(BIN_DIR, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
   if (fs.existsSync(localFFmpeg)) return localFFmpeg;
 
   const localAppData = process.env.LOCALAPPDATA || '';
@@ -62,6 +71,28 @@ function formatDuration(sec) {
     return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   }
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function isPlaylistUrl(url) {
+  const lower = url.toLowerCase();
+  if (lower.includes('watch?v=') && !lower.includes('list=pl')) {
+    return false;
+  }
+  if (lower.includes('list=') ||
+      lower.includes('/playlist') ||
+      lower.includes('/channel/') ||
+      lower.includes('/c/') ||
+      lower.includes('/user/') ||
+      (lower.includes('youtube.com/@') && !lower.includes('/watch'))) {
+    return true;
+  }
+  if (lower.includes('instagram.com/')) {
+    const isSinglePost = lower.includes('/p/') || lower.includes('/reel/') || lower.includes('/stories/') || lower.includes('/tv/');
+    if (!isSinglePost) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function detectPlatform(url) {
@@ -111,7 +142,16 @@ app.post('/api/info', async (req, res) => {
   }
 
   const ffmpegPath = getFFmpegLocation();
-  const args = ['-J', '--no-playlist', '--no-warnings', cleanUrl];
+  const isPlaylist = isPlaylistUrl(cleanUrl);
+  const isInstagramPost = cleanUrl.includes('instagram.com/p/') || cleanUrl.includes('instagram.com/reel/');
+  const args = ['-J'];
+
+  if (isPlaylist) {
+    args.push('--flat-playlist');
+  } else if (!isInstagramPost) {
+    args.push('--no-playlist');
+  }
+  args.push('--no-warnings', cleanUrl);
 
   if (ffmpegPath !== 'ffmpeg') {
     args.push('--ffmpeg-location', path.dirname(ffmpegPath));
@@ -140,6 +180,90 @@ app.post('/api/info', async (req, res) => {
 
     try {
       const info = JSON.parse(stdoutData);
+
+      // 1. Handle Playlists, Channels, and Instagram Profiles
+      if (info._type === 'playlist' && !cleanUrl.includes('/p/') && !cleanUrl.includes('/reel/')) {
+        const isInstagram = cleanUrl.includes('instagram.com');
+        const entries = (info.entries || []).map((entry, index) => {
+          let thumb = '';
+          if (entry.thumbnails && entry.thumbnails.length) {
+            thumb = entry.thumbnails[entry.thumbnails.length - 1].url;
+          } else if (entry.thumbnail) {
+            thumb = entry.thumbnail;
+          } else if (entry.id && !isInstagram) {
+            thumb = `https://i.ytimg.com/vi/${entry.id}/hqdefault.jpg`;
+          }
+          return {
+            index: index + 1,
+            id: entry.id,
+            title: entry.title || (isInstagram ? `Instagram Reel #${index + 1}` : `Episode #${index + 1}`),
+            duration: formatDuration(entry.duration),
+            url: entry.url || (isInstagram ? (entry.webpage_url || cleanUrl) : `https://www.youtube.com/watch?v=${entry.id}`),
+            thumbnail: thumb
+          };
+        });
+
+        return res.json({
+          isPlaylist: true,
+          id: info.id || crypto.randomUUID().slice(0, 8),
+          title: info.title || (isInstagram ? `@${info.uploader || 'Creator'} Reels` : 'Playlist / Channel'),
+          uploader: info.uploader || info.channel || 'Creator',
+          platform: isInstagram ? 'Instagram Profile' : 'YouTube Playlist',
+          url: cleanUrl,
+          thumbnail: (info.thumbnails && info.thumbnails.length)
+            ? info.thumbnails[info.thumbnails.length - 1].url
+            : (entries[0] ? entries[0].thumbnail : ''),
+          totalCount: info.playlist_count || entries.length,
+          items: entries
+        });
+      }
+
+      // 2. Handle Multi-Slide Instagram Carousel Post
+      const isInstagramCarousel = (cleanUrl.includes('instagram.com') || platform === 'Instagram') &&
+                                  Array.isArray(info.entries) &&
+                                  info.entries.length > 1;
+
+      if (isInstagramCarousel) {
+        const slides = info.entries.map((entry, idx) => {
+          const isVideo = (entry.formats && entry.formats.some(f => f.vcodec !== 'none')) ||
+                          entry.ext === 'mp4' ||
+                          (entry.video_ext && entry.video_ext !== 'none');
+
+          let mediaUrl = entry.url || '';
+          if (!mediaUrl && entry.formats && entry.formats.length > 0) {
+            mediaUrl = entry.formats[entry.formats.length - 1].url;
+          }
+
+          let thumbUrl = entry.thumbnail || (entry.thumbnails && entry.thumbnails.length ? entry.thumbnails[entry.thumbnails.length - 1].url : '');
+          if (!thumbUrl) thumbUrl = mediaUrl;
+
+          return {
+            index: idx + 1,
+            id: entry.id || `slide-${idx + 1}`,
+            type: isVideo ? 'video' : 'image',
+            label: isVideo ? `Slide #${idx + 1} (Video)` : `Slide #${idx + 1} (Photo)`,
+            ext: isVideo ? 'mp4' : 'jpg',
+            duration: isVideo ? formatDuration(entry.duration) : null,
+            url: mediaUrl || thumbUrl,
+            thumbnail: thumbUrl,
+            downloadUrl: isVideo
+              ? `/api/download-media?url=${encodeURIComponent(mediaUrl)}&filename=${encodeURIComponent((info.title || 'instagram-video') + '-' + (idx + 1))}&ext=mp4`
+              : `/api/download-media?url=${encodeURIComponent(thumbUrl || mediaUrl)}&filename=${encodeURIComponent((info.title || 'instagram-photo') + '-' + (idx + 1))}&ext=jpg`
+          };
+        });
+
+        return res.json({
+          isCarousel: true,
+          id: info.id || crypto.randomUUID().slice(0, 8),
+          title: info.title || 'Instagram Carousel Post',
+          uploader: info.uploader || 'Instagram User',
+          platform: 'Instagram Carousel',
+          url: cleanUrl,
+          totalSlides: slides.length,
+          slides: slides
+        });
+      }
+
       const isMultiItem = Array.isArray(info.entries) && info.entries.length > 0;
 
       // Extract unique resolution formats
@@ -278,6 +402,7 @@ app.post('/api/info', async (req, res) => {
         title: info.title || `${platform} Media`,
         thumbnail: info.thumbnail || (images[0] ? images[0].url : ''),
         duration: info.duration ? formatDuration(info.duration) : (videoOptions.length ? 'Video' : 'Image'),
+        durationSeconds: typeof info.duration === 'number' ? info.duration : null,
         uploader: info.uploader || info.channel || platform,
         platform,
         url: cleanUrl,
@@ -297,7 +422,7 @@ app.post('/api/info', async (req, res) => {
 
 // 2. POST /api/download - Initiate a video/audio download job
 app.post('/api/download', (req, res) => {
-  const { url, optionId, type, height, format } = req.body;
+  const { url, optionId, type, height, format, trimStart, trimEnd, speedBooster } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'Missing media URL.' });
   }
@@ -311,6 +436,37 @@ app.post('/api/download', (req, res) => {
 
   if (ffmpegPath !== 'ffmpeg') {
     args.push('--ffmpeg-location', path.dirname(ffmpegPath));
+  }
+
+  // Trim / Clip Support
+  const cleanStart = trimStart && typeof trimStart === 'string' ? trimStart.trim().replace(/[^0-9:\.]/g, '') : '';
+  const cleanEnd = trimEnd && typeof trimEnd === 'string' ? trimEnd.trim().replace(/[^0-9:\.]/g, '') : '';
+  if (cleanStart || cleanEnd) {
+    const startVal = cleanStart || '0';
+    const endVal = cleanEnd || 'inf';
+    args.push('--download-sections', `*${startVal}-${endVal}`);
+    args.push('--force-keyframes-at-cuts');
+  }
+
+  // Speed Booster: Multi-threaded parallel downloading
+  const aria2Local = path.join(__dirname, 'bin', process.platform === 'win32' ? 'aria2c.exe' : 'aria2c');
+  const hasAria2 = fs.existsSync(aria2Local);
+  const useSpeedBooster = speedBooster !== false;
+
+  if (useSpeedBooster) {
+    args.push('--concurrent-fragments', '16');
+    args.push('--buffer-size', '1024K');
+    args.push('--http-chunk-size', '10M');
+
+    if (!cleanStart && !cleanEnd) {
+      if (hasAria2) {
+        args.push('--downloader', `aria2c:${aria2Local}`);
+        args.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --summary-interval=1');
+      } else if (process.platform !== 'win32') {
+        args.push('--downloader', 'aria2c');
+        args.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --summary-interval=1');
+      }
+    }
   }
 
   // Format selection logic
@@ -357,13 +513,13 @@ app.post('/api/download', (req, res) => {
     if (percentMatch) {
       job.percent = parseFloat(percentMatch[1]);
       job.status = 'downloading';
-      job.statusText = 'Downloading stream...';
+      job.statusText = 'Downloading stream (multi-threaded)...';
     }
 
-    const speedMatch = text.match(/at\s+([\d\.]+\w+\/s)/);
-    if (speedMatch) job.speed = speedMatch[1];
+    const speedMatch = text.match(/(?:at\s+|DL:)\s*([\d\.]+\w+(?:\/s)?)/i);
+    if (speedMatch) job.speed = speedMatch[1].toLowerCase().endsWith('/s') ? speedMatch[1] : `${speedMatch[1]}/s`;
 
-    const etaMatch = text.match(/ETA\s+([\d:]+)/);
+    const etaMatch = text.match(/ETA:?\s*([\d:]+\w*)/i);
     if (etaMatch) job.eta = etaMatch[1];
 
     if (text.includes('[Merger]') || text.includes('Merging formats') || text.includes('[ExtractAudio]')) {
@@ -408,11 +564,11 @@ app.post('/api/download', (req, res) => {
   res.json({ jobId });
 });
 
-// 3. GET /api/download-image - Direct Image Proxy & Downloader
-app.get('/api/download-image', async (req, res) => {
+// 3. GET /api/download-media & /api/download-image - Direct Media Proxy & Downloader
+app.get(['/api/download-image', '/api/download-media'], async (req, res) => {
   const { url, filename, ext } = req.query;
   if (!url) {
-    return res.status(400).send('Missing image URL');
+    return res.status(400).send('Missing media URL');
   }
 
   try {
@@ -423,22 +579,22 @@ app.get('/api/download-image', async (req, res) => {
     });
 
     if (!response.ok) {
-      return res.status(response.status).send('Failed to fetch image from source.');
+      return res.status(response.status).send('Failed to fetch media from source.');
     }
 
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
-    const cleanExt = ext || (contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg');
-    let safeTitle = (filename || 'downloaded-image').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
-    if (!safeTitle) safeTitle = 'image';
+    const contentType = response.headers.get('content-type') || (ext === 'mp4' ? 'video/mp4' : 'image/jpeg');
+    const cleanExt = ext || (contentType.includes('mp4') ? 'mp4' : contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg');
+    let safeTitle = (filename || 'downloaded-media').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
+    if (!safeTitle) safeTitle = 'media';
 
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.${cleanExt}"`);
 
-    const arrayBuffer = await response.arrayBuffer();
-    return res.send(Buffer.from(arrayBuffer));
+    const { Readable } = require('stream');
+    Readable.fromWeb(response.body).pipe(res);
   } catch (err) {
-    console.error('Image download error:', err);
-    return res.status(500).send('Error downloading image: ' + err.message);
+    console.error('Media download error:', err);
+    return res.status(500).send('Error downloading media: ' + err.message);
   }
 });
 

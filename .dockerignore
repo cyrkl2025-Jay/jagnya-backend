@@ -1,0 +1,9 @@
+.git
+.gradle
+android/
+bin/
+downloads/
+node_modules/
+npm-debug.log
+*.apk
+*.bat
