@@ -1,11 +1,10 @@
-FROM node:20-bullseye-slim
+FROM node:20-bookworm-slim
 
-# Install system dependencies: ffmpeg, aria2, python3, curl
+# Install system dependencies: ffmpeg, aria2, python3, curl, ca-certificates
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     aria2 \
     python3 \
-    python3-pip \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
