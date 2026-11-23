@@ -151,6 +151,9 @@ app.post('/api/info', async (req, res) => {
   } else if (!isInstagramPost) {
     args.push('--no-playlist');
   }
+  if (cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be')) {
+    args.push('--extractor-args', 'youtube:player_client=android,web');
+  }
   args.push('--no-warnings', cleanUrl);
 
   if (ffmpegPath !== 'ffmpeg') {
@@ -433,6 +436,9 @@ app.post('/api/download', (req, res) => {
 
   const ffmpegPath = getFFmpegLocation();
   const args = ['--no-playlist', '--newline'];
+  if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    args.push('--extractor-args', 'youtube:player_client=android,web');
+  }
 
   if (ffmpegPath !== 'ffmpeg') {
     args.push('--ffmpeg-location', path.dirname(ffmpegPath));

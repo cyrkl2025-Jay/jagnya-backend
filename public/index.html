@@ -62,19 +62,7 @@
         <div class="user-greeting-sub">Make a Great Day ✨</div>
       </div>
 
-      <!-- Main Navigation Tabs -->
-      <nav class="main-nav-tabs">
-        <button type="button" class="nav-tab active" id="tabDownloader" onclick="switchMainTab('downloader')">
-          <span class="nav-tab-icon">🌐</span>
-          <span>Link Downloader</span>
-        </button>
-        <button type="button" class="nav-tab" id="tabStatusSaver" onclick="switchMainTab('statusSaver')">
-          <span class="nav-tab-icon">🟢</span>
-          <span>WhatsApp Status</span>
-        </button>
-      </nav>
-
-      <!-- Downloader Tab Content -->
+      <!-- Downloader Section -->
       <div id="downloaderTabContent">
         <!-- Input Section -->
         <form id="urlForm" onsubmit="handleFetchInfo(event)">
@@ -329,81 +317,8 @@
         </div>
       </section>
       </div> <!-- /#downloaderTabContent -->
-
-      <!-- WhatsApp Status Saver Tab Content -->
-      <div id="statusSaverTabContent" style="display: none;">
-        <div class="status-header-card">
-          <div class="status-header-top">
-            <div class="status-title-wrap">
-              <span class="status-wa-icon">🟢</span>
-              <div class="status-title-text">
-                <h2>WhatsApp Status Saver</h2>
-                <p>Saved statuses from your phone's viewed stories</p>
-              </div>
-            </div>
-            <span id="statusCountBadge" class="status-count-tag">0 Found</span>
-          </div>
-
-          <div class="status-actions-row">
-            <button type="button" class="btn-status-action primary" onclick="loadWhatsAppStatuses()">
-              🔄 Refresh Statuses
-            </button>
-            <button type="button" class="btn-status-action secondary" onclick="openWhatsAppApp()">
-              💬 Open WhatsApp
-            </button>
-          </div>
-
-          <!-- Filter Tabs -->
-          <div class="status-filter-pills">
-            <button type="button" class="status-filter-pill active" onclick="filterStatuses('all', this)">All</button>
-            <button type="button" class="status-filter-pill" onclick="filterStatuses('video', this)">🎬 Videos</button>
-            <button type="button" class="status-filter-pill" onclick="filterStatuses('image', this)">📷 Photos</button>
-          </div>
-        </div>
-
-        <!-- Status Grid -->
-        <div id="statusGrid" class="status-grid">
-          <!-- Dynamically populated -->
-        </div>
-
-        <!-- Empty State / Guide -->
-        <div id="statusEmptyState" class="status-empty-card" style="display: none;">
-          <div class="empty-icon">👀</div>
-          <h3>No Statuses Detected Yet</h3>
-          <p class="empty-desc">
-            WhatsApp automatically downloads stories as you view them.<br>
-            <strong>1.</strong> Open WhatsApp and view any friend's status.<br>
-            <strong>2.</strong> Come back here and tap <strong>Refresh Statuses</strong>.
-          </p>
-          <button type="button" class="btn-open-wa" onclick="openWhatsAppApp()">
-            💬 View Statuses on WhatsApp
-          </button>
-        </div>
-      </div>
     </main>
 
-  </div>
-
-  <!-- Status Full-Screen Preview Modal -->
-  <div id="statusPreviewModal" class="status-modal" style="display: none;">
-    <div class="status-modal-overlay" onclick="closeStatusPreview()"></div>
-    <div class="status-modal-container">
-      <div class="status-modal-topbar">
-        <span id="statusModalTitle" class="status-modal-title">Status Preview</span>
-        <button type="button" class="btn-status-modal-close" onclick="closeStatusPreview()">✕</button>
-      </div>
-      <div id="statusModalMediaContainer" class="status-modal-media-wrap">
-        <!-- Image or Video dynamically inserted -->
-      </div>
-      <div class="status-modal-footer">
-        <button type="button" id="btnModalSave" class="btn-status-modal-save" onclick="saveCurrentPreviewStatus()">
-          💾 Save to Gallery
-        </button>
-        <button type="button" id="btnModalShare" class="btn-status-modal-share" onclick="shareCurrentPreviewStatus()">
-          ↗️ Share
-        </button>
-      </div>
-    </div>
   </div>
 
   <!-- Engine Connection Modal -->

@@ -1,16 +1,14 @@
 @echo off
-title Push to GitHub - Universal Downloader
-echo ========================================================
-echo   Pushing code to GitHub to trigger APK Cloud Build...
-echo ========================================================
-echo.
-
 cd /d "%~dp0"
-.\bin\git\cmd\git.exe push -f origin main
-
+echo ===================================================
+echo   Pushing Jagnya Downloader to GitHub...
+echo ===================================================
 echo.
-echo ========================================================
-echo   Done! Check the "Actions" tab on GitHub to see your
-echo   APK building in the cloud!
-echo ========================================================
+echo If a browser window opens, click "Authorize Git".
+echo.
+.\bin\git\cmd\git.exe push -u origin main
+echo.
+echo ===================================================
+echo   Done! Press any key to close this window.
+echo ===================================================
 pause

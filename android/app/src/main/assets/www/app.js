@@ -289,8 +289,29 @@ async function handleFetchInfo(event) {
   clearError();
 
   const urlInput = document.getElementById('videoUrl');
-  const url = urlInput.value.trim();
+  let url = urlInput ? urlInput.value.trim() : '';
   if (!url) return;
+
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = 'https://' + url;
+    urlInput.value = url;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname || !parsed.hostname.includes('.')) {
+      showError('Please paste a complete valid URL (e.g. https://youtu.be/... or from Instagram / Facebook).');
+      return;
+    }
+    const cleanHost = parsed.hostname.replace(/^www\./, '').toLowerCase();
+    if ((cleanHost === 'youtube.com' || cleanHost === 'm.youtube.com') && (parsed.pathname === '/' || parsed.pathname === '')) {
+      showError('Please paste a specific YouTube video link (e.g. from the video\'s "Share" button), not just youtube.com.');
+      return;
+    }
+  } catch (e) {
+    showError('Please paste a valid video URL starting with https://');
+    return;
+  }
 
   const btnText = document.getElementById('btnText');
   const btnSpinner = document.getElementById('btnSpinner');
@@ -316,9 +337,9 @@ async function handleFetchInfo(event) {
       body: JSON.stringify({ url })
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.error || 'Failed to analyze media link');
+      throw new Error(data.details || data.error || 'Failed to analyze media link');
     }
 
     currentVideoData = data;
@@ -330,7 +351,7 @@ async function handleFetchInfo(event) {
       renderMediaPreview(data);
     }
   } catch (err) {
-    showError(err.message + ' (Make sure Engine server is online)');
+    showError(err.message);
     checkEngineHealth();
   } finally {
     btnText.textContent = 'Analyze Link';
@@ -1050,198 +1071,4 @@ async function downloadAllCarouselSlides() {
   }
 }
 
-// ============================================
-// Main Tab Navigation & WhatsApp Status Saver
-// ============================================
-let currentWhatsAppStatuses = [];
-let activeStatusFilter = 'all';
-let currentPreviewStatus = null;
 
-function switchMainTab(tab) {
-  const tabDownloader = document.getElementById('tabDownloader');
-  const tabStatusSaver = document.getElementById('tabStatusSaver');
-  const contentDownloader = document.getElementById('downloaderTabContent');
-  const contentStatusSaver = document.getElementById('statusSaverTabContent');
-
-  if (tab === 'statusSaver') {
-    if (tabDownloader) tabDownloader.classList.remove('active');
-    if (tabStatusSaver) tabStatusSaver.classList.add('active');
-    if (contentDownloader) contentDownloader.style.display = 'none';
-    if (contentStatusSaver) contentStatusSaver.style.display = 'block';
-    loadWhatsAppStatuses();
-  } else {
-    if (tabStatusSaver) tabStatusSaver.classList.remove('active');
-    if (tabDownloader) tabDownloader.classList.add('active');
-    if (contentStatusSaver) contentStatusSaver.style.display = 'none';
-    if (contentDownloader) contentDownloader.style.display = 'block';
-  }
-}
-
-function openWhatsAppApp() {
-  if (window.AndroidNative && window.AndroidNative.openWhatsApp) {
-    window.AndroidNative.openWhatsApp();
-  } else {
-    window.open('https://web.whatsapp.com', '_blank');
-  }
-}
-
-function loadWhatsAppStatuses() {
-  const grid = document.getElementById('statusGrid');
-  const countBadge = document.getElementById('statusCountBadge');
-  const emptyState = document.getElementById('statusEmptyState');
-
-  if (!window.AndroidNative || !window.AndroidNative.getWhatsAppStatuses) {
-    // Running in browser outside native APK
-    if (grid) grid.innerHTML = '';
-    if (emptyState) {
-      emptyState.style.display = 'block';
-      emptyState.innerHTML = `
-        <div class="empty-icon">🟢</div>
-        <h3>Native Android Feature</h3>
-        <p class="empty-desc">
-          WhatsApp Status Saver runs directly on your Android phone through the installed APK.<br>
-          It reads viewed stories directly from your phone's hidden media storage.
-        </p>
-        <a href="${getApiUrl('/UniversalDownloader.apk')}" class="btn-open-wa" style="text-decoration: none; display: inline-block;">
-          ⬇️ Download APK to Use Status Saver
-        </a>
-      `;
-    }
-    if (countBadge) countBadge.textContent = 'App Feature';
-    return;
-  }
-
-  try {
-    if (window.AndroidNative.hasStoragePermission && !window.AndroidNative.hasStoragePermission()) {
-      if (window.AndroidNative.requestStoragePermission) {
-        window.AndroidNative.requestStoragePermission();
-      }
-    }
-
-    const jsonStr = window.AndroidNative.getWhatsAppStatuses();
-    const list = JSON.parse(jsonStr || '[]');
-    currentWhatsAppStatuses = Array.isArray(list) ? list : [];
-
-    if (countBadge) {
-      countBadge.textContent = `${currentWhatsAppStatuses.length} Status${currentWhatsAppStatuses.length === 1 ? '' : 'es'}`;
-    }
-
-    renderStatusGrid();
-  } catch (err) {
-    console.error('Failed loading statuses:', err);
-    if (grid) grid.innerHTML = '';
-    if (emptyState) emptyState.style.display = 'block';
-  }
-}
-
-function filterStatuses(type, btnEl) {
-  activeStatusFilter = type;
-  const pills = document.querySelectorAll('.status-filter-pill');
-  pills.forEach(p => p.classList.remove('active'));
-  if (btnEl) btnEl.classList.add('active');
-  renderStatusGrid();
-}
-
-function renderStatusGrid() {
-  const grid = document.getElementById('statusGrid');
-  const emptyState = document.getElementById('statusEmptyState');
-  if (!grid) return;
-
-  grid.innerHTML = '';
-  const filtered = currentWhatsAppStatuses.filter(item => {
-    if (activeStatusFilter === 'video') return item.type === 'video';
-    if (activeStatusFilter === 'image') return item.type === 'image';
-    return true;
-  });
-
-  if (filtered.length === 0) {
-    if (emptyState) emptyState.style.display = 'block';
-    return;
-  }
-
-  if (emptyState) emptyState.style.display = 'none';
-
-  filtered.forEach((item, index) => {
-    const card = document.createElement('div');
-    card.className = 'status-item-card';
-
-    const isVideo = item.type === 'video';
-    const badgeText = isVideo ? '🎬 Video' : '📷 Photo';
-
-    card.innerHTML = `
-      <div class="status-thumb-wrap" onclick="openStatusPreview(${index})">
-        ${isVideo
-          ? `<video class="status-thumb-video" src="${item.uri}#t=0.5" preload="metadata"></video><div class="status-play-overlay">▶</div>`
-          : `<img class="status-thumb-img" src="${item.uri}" alt="${item.name}" loading="lazy" />`
-        }
-        <span class="status-type-badge">${badgeText}</span>
-        <span class="status-size-badge">${item.size || ''}</span>
-      </div>
-      <div class="status-card-actions">
-        <button type="button" class="btn-card-save" onclick="saveStatusItem('${item.path.replace(/\\/g, '\\\\')}')">
-          💾 Save
-        </button>
-        <button type="button" class="btn-card-share" onclick="shareStatusItem('${item.path.replace(/\\/g, '\\\\')}')">
-          ↗️ Share
-        </button>
-      </div>
-    `;
-
-    grid.appendChild(card);
-  });
-}
-
-function saveStatusItem(filePath) {
-  if (window.AndroidNative && window.AndroidNative.saveStatusToGallery) {
-    window.AndroidNative.saveStatusToGallery(filePath);
-  } else {
-    alert('Please open this inside the Universal Downloader Android app to save.');
-  }
-}
-
-function shareStatusItem(filePath) {
-  if (window.AndroidNative && window.AndroidNative.shareStatus) {
-    window.AndroidNative.shareStatus(filePath);
-  } else {
-    alert('Please open this inside the Universal Downloader Android app to share.');
-  }
-}
-
-function openStatusPreview(index) {
-  const item = currentWhatsAppStatuses[index];
-  if (!item) return;
-  currentPreviewStatus = item;
-
-  const modal = document.getElementById('statusPreviewModal');
-  const title = document.getElementById('statusModalTitle');
-  const mediaWrap = document.getElementById('statusModalMediaContainer');
-
-  if (title) title.textContent = item.name || 'Status Preview';
-  if (mediaWrap) {
-    mediaWrap.innerHTML = item.type === 'video'
-      ? `<video src="${item.uri}" controls autoplay style="width: 100%; max-height: 65vh;"></video>`
-      : `<img src="${item.uri}" alt="Preview" style="max-width: 100%; max-height: 65vh; object-fit: contain;" />`;
-  }
-
-  if (modal) modal.style.display = 'flex';
-}
-
-function closeStatusPreview() {
-  const modal = document.getElementById('statusPreviewModal');
-  const mediaWrap = document.getElementById('statusModalMediaContainer');
-  if (mediaWrap) mediaWrap.innerHTML = '';
-  if (modal) modal.style.display = 'none';
-  currentPreviewStatus = null;
-}
-
-function saveCurrentPreviewStatus() {
-  if (currentPreviewStatus) {
-    saveStatusItem(currentPreviewStatus.path);
-  }
-}
-
-function shareCurrentPreviewStatus() {
-  if (currentPreviewStatus) {
-    shareStatusItem(currentPreviewStatus.path);
-  }
-}
