@@ -4,7 +4,7 @@ let deferredPrompt = null;
 
 const CANDIDATE_URLS = [
   'https://jagnya-backend.onrender.com',
-  'https://petroleum-naturals-pushing-institute.trycloudflare.com',
+  'https://regression-lat-faqs-best.trycloudflare.com',
   'http://192.168.0.105:5000',
   'http://192.168.0.102:5000'
 ];
