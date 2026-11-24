@@ -246,11 +246,40 @@ function toggleSpeedBooster(forceVal) {
   }
 }
 
+let autoAnalyzeTimeout = null;
+
+function getClientCachedInfo(url) {
+  try {
+    const raw = sessionStorage.getItem('jagnya_cache_' + url);
+    if (!raw) return null;
+    const item = JSON.parse(raw);
+    if (Date.now() - item.time < 30 * 60 * 1000) return item.data;
+  } catch (e) {}
+  return null;
+}
+
+function setClientCachedInfo(url, data) {
+  try {
+    sessionStorage.setItem('jagnya_cache_' + url, JSON.stringify({ time: Date.now(), data }));
+  } catch (e) {}
+}
+
 function handleInputChange() {
   const urlInput = document.getElementById('videoUrl');
   const clearBtn = document.getElementById('btnClear');
+  const val = urlInput ? urlInput.value.trim() : '';
   if (clearBtn) {
-    clearBtn.style.display = urlInput.value.trim().length > 0 ? 'flex' : 'none';
+    clearBtn.style.display = val.length > 0 ? 'flex' : 'none';
+  }
+
+  // Auto-analyze immediately when a full link is pasted
+  if (val.startsWith('http://') || val.startsWith('https://')) {
+    if (val.includes('youtu.be/') || val.includes('watch?v=') || val.includes('/shorts/') || val.includes('/reel/') || val.includes('/p/') || val.includes('facebook.com') || val.includes('fb.watch')) {
+      clearTimeout(autoAnalyzeTimeout);
+      autoAnalyzeTimeout = setTimeout(() => {
+        handleFetchInfo();
+      }, 350);
+    }
   }
 }
 
@@ -316,6 +345,16 @@ async function handleFetchInfo(event) {
     return;
   }
 
+  // Instant 0ms cached preview if already analyzed
+  const cachedData = getClientCachedInfo(url);
+  if (cachedData) {
+    currentVideoData = cachedData;
+    if (cachedData.isCarousel) renderCarouselView(cachedData);
+    else if (cachedData.isPlaylist) renderPlaylistView(cachedData);
+    else renderMediaPreview(cachedData);
+    return;
+  }
+
   const btnText = document.getElementById('btnText');
   const btnSpinner = document.getElementById('btnSpinner');
   const btnAnalyze = document.getElementById('btnAnalyze');
@@ -345,6 +384,7 @@ async function handleFetchInfo(event) {
       throw new Error(data.details || data.error || 'Failed to analyze media link');
     }
 
+    setClientCachedInfo(url, data);
     currentVideoData = data;
     if (data.isCarousel) {
       renderCarouselView(data);

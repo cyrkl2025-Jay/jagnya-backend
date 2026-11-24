@@ -107,6 +107,10 @@ function detectPlatform(url) {
   return 'Web Video / Media';
 }
 
+// In-memory cache for ultra-fast instant metadata re-analysis
+const metadataCache = new Map();
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 // 1. POST /api/info - Inspect metadata, video/audio formats, and images/thumbnails
 app.post('/api/info', async (req, res) => {
   const { url } = req.body;
@@ -115,6 +119,13 @@ app.post('/api/info', async (req, res) => {
   }
 
   const cleanUrl = url.trim();
+
+  // Instant cache hit: return in 0.001s
+  const cached = metadataCache.get(cleanUrl);
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL_MS)) {
+    return res.json(cached.data);
+  }
+
   const platform = detectPlatform(cleanUrl);
 
   // Check if it is a direct image URL
@@ -144,7 +155,13 @@ app.post('/api/info', async (req, res) => {
   const ffmpegPath = getFFmpegLocation();
   const isPlaylist = isPlaylistUrl(cleanUrl);
   const isInstagramPost = cleanUrl.includes('instagram.com/p/') || cleanUrl.includes('instagram.com/reel/');
-  const args = ['-J'];
+  const args = [
+    '-J',
+    '--skip-download',
+    '--no-warnings',
+    '--no-check-certificates',
+    '--socket-timeout', '10'
+  ];
 
   if (isPlaylist) {
     args.push('--flat-playlist');
@@ -152,9 +169,11 @@ app.post('/api/info', async (req, res) => {
     args.push('--no-playlist');
   }
   if (cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be')) {
-    args.push('--extractor-args', 'youtube:player_client=android,web');
+    args.push('--extractor-args', 'youtube:player_client=android');
+  } else if (cleanUrl.includes('instagram.com')) {
+    args.push('--extractor-args', 'instagram:api_client=android');
   }
-  args.push('--no-warnings', cleanUrl);
+  args.push(cleanUrl);
 
   if (ffmpegPath !== 'ffmpeg') {
     args.push('--ffmpeg-location', path.dirname(ffmpegPath));
@@ -400,7 +419,7 @@ app.post('/api/info', async (req, res) => {
         });
       }
 
-      return res.json({
+      const resultData = {
         id: info.id || crypto.randomUUID().slice(0, 8),
         title: info.title || `${platform} Media`,
         thumbnail: info.thumbnail || (images[0] ? images[0].url : ''),
@@ -415,7 +434,16 @@ app.post('/api/info', async (req, res) => {
           audio: audioOptions
         },
         images
-      });
+      };
+
+      // Save in LRU memory cache
+      metadataCache.set(cleanUrl, { timestamp: Date.now(), data: resultData });
+      if (metadataCache.size > 250) {
+        const oldest = metadataCache.keys().next().value;
+        metadataCache.delete(oldest);
+      }
+
+      return res.json(resultData);
     } catch (parseErr) {
       console.error('JSON parse error:', parseErr);
       return res.status(500).json({ error: 'Failed to parse media metadata.' });
