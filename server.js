@@ -111,6 +111,141 @@ function detectPlatform(url) {
 const metadataCache = new Map();
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
+/**
+ * Scrapes all embedded and content images from any regular webpage
+ */
+async function extractImagesFromWebpage(pageUrl) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  
+  const response = await fetch(pageUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9'
+    },
+    signal: controller.signal
+  });
+  clearTimeout(timeoutId);
+
+  if (!response.ok) {
+    throw new Error(`Failed to load page: HTTP ${response.status}`);
+  }
+
+  const html = await response.text();
+  const baseUri = new URL(pageUrl);
+
+  // Extract page title
+  let title = '';
+  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  if (titleMatch && titleMatch[1]) {
+    title = titleMatch[1].trim().replace(/\s+/g, ' ');
+  }
+  if (!title) {
+    const ogTitle = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
+    if (ogTitle && ogTitle[1]) title = ogTitle[1].trim();
+  }
+  if (!title) {
+    title = baseUri.hostname;
+  }
+
+  const imageUrls = new Set();
+
+  const addCandidate = (rawUrl) => {
+    if (!rawUrl || typeof rawUrl !== 'string') return;
+    rawUrl = rawUrl.trim().replace(/&amp;/g, '&');
+    if (!rawUrl || rawUrl.startsWith('data:') || rawUrl.startsWith('javascript:')) return;
+    try {
+      const resolved = new URL(rawUrl, baseUri).href;
+      const lower = resolved.toLowerCase();
+      // Filter tracking pixels, SVGs, and tiny analytics markers
+      if (lower.includes('1x1') || lower.includes('pixel') || lower.includes('analytics') || lower.includes('favicon.ico')) return;
+      if (lower.endsWith('.svg')) return;
+      imageUrls.add(resolved);
+    } catch {}
+  };
+
+  // 1. Meta OpenGraph & Twitter image tags (primary high-resolution previews)
+  const metaRegex = /<meta[^>]*(?:property|name)=["'](og:image|twitter:image|twitter:image:src)["'][^>]*content=["']([^"']+)["']/gi;
+  let match;
+  while ((match = metaRegex.exec(html)) !== null) {
+    addCandidate(match[2]);
+  }
+  const metaRegex2 = /<meta[^>]*content=["']([^"']+)["'][^>]*(?:property|name)=["'](og:image|twitter:image)["']/gi;
+  while ((match = metaRegex2.exec(html)) !== null) {
+    addCandidate(match[1]);
+  }
+
+  // 2. Link rel="image_src"
+  const linkRegex = /<link[^>]*rel=["'](?:image_src|apple-touch-icon)["'][^>]*href=["']([^"']+)["']/gi;
+  while ((match = linkRegex.exec(html)) !== null) {
+    addCandidate(match[1]);
+  }
+
+  // 3. <img> tags: src, data-src, data-original, data-highres, srcset
+  const imgTagRegex = /<img\b([^>]*)>/gi;
+  while ((match = imgTagRegex.exec(html)) !== null) {
+    const attrs = match[1];
+    const highRes = attrs.match(/\b(?:data-original|data-highres|data-full|data-src|data-lazy-src)=["']([^"']+)["']/i);
+    if (highRes && highRes[1]) addCandidate(highRes[1]);
+
+    const srcsetAttr = attrs.match(/\b(?:data-srcset|srcset)=["']([^"']+)["']/i);
+    if (srcsetAttr && srcsetAttr[1]) {
+      const parts = srcsetAttr[1].split(',');
+      if (parts.length > 0) {
+        const lastPart = parts[parts.length - 1].trim().split(/\s+/)[0];
+        addCandidate(lastPart);
+      }
+    }
+
+    const srcAttr = attrs.match(/\bsrc=["']([^"']+)["']/i);
+    if (srcAttr && srcAttr[1]) addCandidate(srcAttr[1]);
+  }
+
+  // 4. Background images in style tags or attributes
+  const bgRegex = /url\(['"]?([^'"()]+?\.(?:jpg|jpeg|png|webp))['"]?\)/gi;
+  while ((match = bgRegex.exec(html)) !== null) {
+    addCandidate(match[1]);
+  }
+
+  const cleanTitle = (title || 'image').slice(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const slides = Array.from(imageUrls).map((imgUrl, idx) => {
+    let ext = 'jpg';
+    try {
+      const pathname = new URL(imgUrl).pathname.toLowerCase();
+      if (pathname.endsWith('.png')) ext = 'png';
+      else if (pathname.endsWith('.webp')) ext = 'webp';
+      else if (pathname.endsWith('.gif')) ext = 'gif';
+    } catch {}
+
+    const proxyDownloadUrl = `/api/proxy-image?url=${encodeURIComponent(imgUrl)}&name=${encodeURIComponent(cleanTitle)}-img-${idx + 1}.${ext}&referer=${encodeURIComponent(pageUrl)}`;
+
+    return {
+      index: idx + 1,
+      type: 'image',
+      url: imgUrl,
+      displayUrl: imgUrl,
+      thumbnail: imgUrl,
+      downloadUrl: proxyDownloadUrl,
+      ext: ext,
+      resolution: 'High Resolution'
+    };
+  });
+
+  return {
+    id: crypto.randomUUID().slice(0, 8),
+    title: title || 'Website Images',
+    thumbnail: slides.length > 0 ? slides[0].thumbnail : '',
+    duration: `${slides.length} Images`,
+    uploader: baseUri.hostname,
+    platform: 'Website Image Gallery',
+    isCarousel: true,
+    isWebsiteGallery: true,
+    totalSlides: slides.length,
+    slides: slides
+  };
+}
+
 // 1. POST /api/info - Inspect metadata, video/audio formats, and images/thumbnails
 app.post('/api/info', async (req, res) => {
   const { url } = req.body;
@@ -191,8 +326,19 @@ app.post('/api/info', async (req, res) => {
     stderrData += data.toString();
   });
 
-  ytdlp.on('close', (code) => {
+  ytdlp.on('close', async (code) => {
     if (code !== 0) {
+      console.log('yt-dlp exited with non-zero code. Attempting website image scraping fallback for:', cleanUrl);
+      try {
+        const websiteGallery = await extractImagesFromWebpage(cleanUrl);
+        if (websiteGallery && websiteGallery.slides && websiteGallery.slides.length > 0) {
+          metadataCache.set(cleanUrl, { timestamp: Date.now(), data: websiteGallery });
+          return res.json(websiteGallery);
+        }
+      } catch (scrapeErr) {
+        console.error('Website image scrape fallback error:', scrapeErr.message);
+      }
+
       console.error('yt-dlp error:', stderrData);
       return res.status(500).json({
         error: 'Unable to fetch media information. Ensure the post is public and the link is valid.',
@@ -205,6 +351,19 @@ app.post('/api/info', async (req, res) => {
 
       // 1. Handle Playlists, Channels, and Instagram Profiles
       if (info._type === 'playlist' && !cleanUrl.includes('/p/') && !cleanUrl.includes('/reel/')) {
+        // If it's a generic webpage (e.g. Wikipedia or blog) that yt-dlp parsed as a playlist of audio snippets, prioritize website image extraction
+        if (info.extractor === 'generic' || (!cleanUrl.includes('youtube.com') && !cleanUrl.includes('instagram.com'))) {
+          try {
+            const websiteGallery = await extractImagesFromWebpage(cleanUrl);
+            if (websiteGallery && websiteGallery.slides && websiteGallery.slides.length > 0) {
+              metadataCache.set(cleanUrl, { timestamp: Date.now(), data: websiteGallery });
+              return res.json(websiteGallery);
+            }
+          } catch (scrapeErr) {
+            console.error('Website image fallback check error:', scrapeErr.message);
+          }
+        }
+
         const isInstagram = cleanUrl.includes('instagram.com');
         const entries = (info.entries || []).map((entry, index) => {
           let thumb = '';
@@ -348,6 +507,18 @@ app.post('/api/info', async (req, res) => {
           type: 'audio'
         }
       ] : [];
+
+      if (videoOptions.length === 0 && platform === 'Web Video / Media') {
+        try {
+          const websiteGallery = await extractImagesFromWebpage(cleanUrl);
+          if (websiteGallery && websiteGallery.slides && websiteGallery.slides.length > 0) {
+            metadataCache.set(cleanUrl, { timestamp: Date.now(), data: websiteGallery });
+            return res.json(websiteGallery);
+          }
+        } catch (scrapeErr) {
+          console.error('Website image scrape fallback error:', scrapeErr.message);
+        }
+      }
 
       // Extract Images & High-Res Thumbnails
       const images = [];
@@ -598,18 +769,25 @@ app.post('/api/download', (req, res) => {
   res.json({ jobId });
 });
 
-// 3. GET /api/download-media & /api/download-image - Direct Media Proxy & Downloader
-app.get(['/api/download-image', '/api/download-media'], async (req, res) => {
-  const { url, filename, ext } = req.query;
-  if (!url) {
+// 3. GET /api/download-media, /api/download-image & /api/proxy-image - Direct Media Proxy & Downloader
+app.get(['/api/download-image', '/api/download-media', '/api/proxy-image'], async (req, res) => {
+  const { url, filename, name, ext, referer } = req.query;
+  const targetUrl = url;
+  if (!targetUrl) {
     return res.status(400).send('Missing media URL');
   }
 
   try {
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
+    const fetchHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
+    };
+    if (referer) {
+      fetchHeaders['Referer'] = referer;
+    }
+
+    const response = await fetch(targetUrl, {
+      headers: fetchHeaders
     });
 
     if (!response.ok) {
@@ -618,11 +796,15 @@ app.get(['/api/download-image', '/api/download-media'], async (req, res) => {
 
     const contentType = response.headers.get('content-type') || (ext === 'mp4' ? 'video/mp4' : 'image/jpeg');
     const cleanExt = ext || (contentType.includes('mp4') ? 'mp4' : contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg');
-    let safeTitle = (filename || 'downloaded-media').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
+    let safeTitle = (name || filename || 'downloaded-media').replace(/[^a-zA-Z0-9_\-\s\.]/g, '').trim();
     if (!safeTitle) safeTitle = 'media';
+    if (!safeTitle.toLowerCase().endsWith(`.${cleanExt}`) && !/\.(jpg|jpeg|png|webp|gif|mp4)$/i.test(safeTitle)) {
+      safeTitle = `${safeTitle}.${cleanExt}`;
+    }
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}.${cleanExt}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}"`);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
 
     const { Readable } = require('stream');
     Readable.fromWeb(response.body).pipe(res);

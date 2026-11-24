@@ -21,8 +21,10 @@ function getEngineBaseUrl() {
 }
 
 function getApiUrl(path) {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
   const base = getEngineBaseUrl();
-  return base ? `${base}${path}` : path;
+  return base ? `${base}${path.startsWith('/') ? '' : '/'}${path}` : path;
 }
 
 async function testCandidate(url) {
@@ -1052,15 +1054,28 @@ function renderCarouselView(data) {
   if (playlistSection) playlistSection.style.display = 'none';
   if (progressSection) progressSection.style.display = 'none';
 
+  const badgeTop = document.getElementById('carouselBadgeTop');
   const title = document.getElementById('carouselTitle');
   const uploader = document.getElementById('carouselUploader');
   const badge = document.getElementById('carouselSlideBadge');
   const grid = document.getElementById('carouselSlidesGrid');
+  const btnDownloadAll = document.getElementById('btnDownloadAllCarousel');
 
-  if (title) title.textContent = data.title || 'Instagram Carousel';
-  if (uploader) uploader.textContent = `@${data.uploader || 'Creator'}`;
+  const isWebGallery = !!data.isWebsiteGallery;
+  if (badgeTop) {
+    badgeTop.textContent = isWebGallery ? '📸 Website Image Gallery' : '📸 Instagram Carousel';
+  }
+  if (title) title.textContent = data.title || (isWebGallery ? 'Website Images' : 'Instagram Carousel');
+  if (uploader) uploader.textContent = isWebGallery ? `🌐 ${data.uploader || 'Website'}` : `@${data.uploader || 'Creator'}`;
+  
   const totalSlides = data.totalSlides || (data.slides ? data.slides.length : 0);
-  if (badge) badge.textContent = `${totalSlides} Slide${totalSlides > 1 ? 's' : ''}`;
+  const itemWord = isWebGallery ? 'Image' : 'Slide';
+  if (badge) badge.textContent = `${totalSlides} ${itemWord}${totalSlides > 1 ? 's' : ''}`;
+  if (btnDownloadAll) {
+    btnDownloadAll.textContent = `⚡ Download All (${totalSlides}) ${itemWord}${totalSlides > 1 ? 's' : ''}`;
+  }
+
+  const cleanPrefix = (data.title || (isWebGallery ? 'website' : 'instagram')).slice(0, 25).replace(/[^a-zA-Z0-9_-]/g, '_');
 
   if (grid) {
     grid.innerHTML = '';
@@ -1070,16 +1085,17 @@ function renderCarouselView(data) {
       const isVideo = slide.type === 'video';
       const icon = isVideo ? '🎬' : '📷';
       const typeLabel = isVideo ? 'Video' : 'Photo';
-      const dlUrl = getApiUrl(slide.downloadUrl);
+      const dlUrl = getApiUrl(slide.downloadUrl || slide.url);
+      const filename = `${cleanPrefix}-${isWebGallery ? 'img' : 'slide'}-${slide.index}.${slide.ext || (isVideo ? 'mp4' : 'jpg')}`;
 
       card.innerHTML = `
         <div class="carousel-slide-media">
-          <img src="${slide.thumbnail || slide.url}" alt="Slide #${slide.index}" loading="lazy" />
+          <img src="${slide.thumbnail || slide.url}" alt="${itemWord} #${slide.index}" loading="lazy" onerror="this.src='https://placehold.co/400x400/1e293b/94a3b8?text=Image+Unavailable'" />
           <span class="carousel-slide-num">#${slide.index}</span>
           <span class="carousel-slide-type-badge ${isVideo ? 'video' : 'photo'}">${icon} ${typeLabel}</span>
         </div>
         <div class="carousel-slide-footer">
-          <a href="${dlUrl}" download="${(data.title || 'instagram')}-slide-${slide.index}.${slide.ext}" class="btn-download-slide" target="_blank">
+          <a href="${dlUrl}" download="${filename}" class="btn-download-slide" target="_blank">
             ⬇️ Download ${typeLabel}
           </a>
         </div>
@@ -1097,19 +1113,21 @@ function renderCarouselView(data) {
 async function downloadAllCarouselSlides() {
   if (!currentCarouselData || !currentCarouselData.slides || currentCarouselData.slides.length === 0) return;
   const slides = currentCarouselData.slides;
+  const isWebGallery = !!currentCarouselData.isWebsiteGallery;
+  const cleanPrefix = (currentCarouselData.title || (isWebGallery ? 'website' : 'instagram')).slice(0, 25).replace(/[^a-zA-Z0-9_-]/g, '_');
 
   for (let i = 0; i < slides.length; i++) {
     const slide = slides[i];
-    const dlUrl = getApiUrl(slide.downloadUrl);
+    const dlUrl = getApiUrl(slide.downloadUrl || slide.url);
     const a = document.createElement('a');
     a.href = dlUrl;
-    a.download = `${(currentCarouselData.title || 'instagram')}-slide-${slide.index}.${slide.ext || (slide.type === 'video' ? 'mp4' : 'jpg')}`;
+    a.download = `${cleanPrefix}-${isWebGallery ? 'img' : 'slide'}-${slide.index}.${slide.ext || (slide.type === 'video' ? 'mp4' : 'jpg')}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
 
     if (i < slides.length - 1) {
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, 500));
     }
   }
 }
