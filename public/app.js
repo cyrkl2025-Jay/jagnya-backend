@@ -3,20 +3,17 @@ let activePollingInterval = null;
 let deferredPrompt = null;
 
 const CANDIDATE_URLS = [
-  'https://jagnya-backend.onrender.com',
-  'https://regression-lat-faqs-best.trycloudflare.com',
-  'http://192.168.0.105:5000',
-  'http://192.168.0.102:5000'
+  'https://jagnya-backend.onrender.com'
 ];
 
-let activeEngineBase = '';
+let activeEngineBase = 'https://jagnya-backend.onrender.com';
 
 function getEngineBaseUrl() {
+  if (activeEngineBase) return activeEngineBase;
   const custom = localStorage.getItem('downloader_engine_url');
-  if (custom && custom.trim().length > 0) {
+  if (custom && custom.trim().length > 0 && custom.includes('onrender.com')) {
     return custom.trim().replace(/\/+$/, '');
   }
-  if (activeEngineBase) return activeEngineBase;
   if (window.location.protocol.startsWith('http')) {
     return ''; // Relative path when served directly from Express
   }
@@ -31,8 +28,8 @@ function getApiUrl(path) {
 async function testCandidate(url) {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500);
-    const res = await fetch(url + '/manifest.json', { signal: controller.signal });
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const res = await fetch((url || '') + '/manifest.json', { signal: controller.signal });
     clearTimeout(timeoutId);
     return res.ok;
   } catch (e) {
@@ -44,13 +41,17 @@ async function checkEngineHealth() {
   const dot = document.getElementById('statusDot');
   const label = document.getElementById('engineStatusLabel');
 
-  // Check saved custom URL first
-  const custom = localStorage.getItem('downloader_engine_url');
-  if (custom && await testCandidate(custom)) {
-    activeEngineBase = custom;
-    if (dot) dot.className = 'status-dot online';
-    if (label) label.textContent = 'Engine Online';
-    return true;
+  if (label) label.textContent = 'Connecting...';
+
+  // Check permanent cloud server first
+  for (const candidate of CANDIDATE_URLS) {
+    if (await testCandidate(candidate)) {
+      activeEngineBase = candidate;
+      localStorage.setItem('downloader_engine_url', candidate);
+      if (dot) dot.className = 'status-dot online';
+      if (label) label.textContent = 'Engine Online';
+      return true;
+    }
   }
 
   // If on web (http), check relative
@@ -63,20 +64,22 @@ async function checkEngineHealth() {
     }
   }
 
-  // Loop through candidates to auto-discover
-  for (const candidate of CANDIDATE_URLS) {
-    if (await testCandidate(candidate)) {
-      activeEngineBase = candidate;
-      localStorage.setItem('downloader_engine_url', candidate);
-      if (dot) dot.className = 'status-dot online';
-      if (label) label.textContent = 'Engine Online';
-      return true;
-    }
+  // Check saved custom URL
+  const custom = localStorage.getItem('downloader_engine_url');
+  if (custom && await testCandidate(custom)) {
+    activeEngineBase = custom;
+    if (dot) dot.className = 'status-dot online';
+    if (label) label.textContent = 'Engine Online';
+    return true;
+  } else if (custom) {
+    localStorage.removeItem('downloader_engine_url');
   }
 
-  if (dot) dot.className = 'status-dot offline';
-  if (label) label.textContent = 'Offline (Tap)';
-  return false;
+  // Still default to permanent cloud URL so requests can trigger wake-up
+  activeEngineBase = CANDIDATE_URLS[0];
+  if (dot) dot.className = 'status-dot online';
+  if (label) label.textContent = 'Engine Cloud';
+  return true;
 }
 
 function selectPreset(url) {
