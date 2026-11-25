@@ -853,6 +853,13 @@ app.get('/api/file/:jobId', (req, res) => {
   });
 });
 
+// Keep Render Cloud backend warm and awake (pings every 10 minutes)
+setInterval(() => {
+  fetch('https://jagnya-backend.onrender.com/manifest.json')
+    .then(r => r.ok && console.log('[KeepAlive] Render cloud ping OK'))
+    .catch(() => {});
+}, 10 * 60 * 1000);
+
 app.listen(PORT, HOST, () => {
   console.log(`====================================================`);
   console.log(` Universal Video & Image Downloader is running!`);
