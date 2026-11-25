@@ -556,7 +556,7 @@ async function startDownload(option) {
 
   statusText.textContent = isTrimActive
     ? 'Trimming & preparing highlight clip...'
-    : (boosterOn ? 'Accelerating stream with 16 parallel threads...' : 'Initializing download...');
+    : 'Connecting to media stream...';
   percentText.textContent = '0%';
   barFill.style.width = '0%';
   speedText.textContent = 'Speed: --';

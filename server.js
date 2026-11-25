@@ -289,24 +289,24 @@ app.post('/api/info', async (req, res) => {
 
   const ffmpegPath = getFFmpegLocation();
   const isPlaylist = isPlaylistUrl(cleanUrl);
-  const isInstagramPost = cleanUrl.includes('instagram.com/p/') || cleanUrl.includes('instagram.com/reel/');
   const args = [
     '-J',
     '--skip-download',
     '--no-warnings',
     '--no-check-certificates',
-    '--socket-timeout', '10'
+    '--socket-timeout', '8',
+    '--retries', '2',
+    '--fragment-retries', '2'
   ];
 
   if (isPlaylist) {
     args.push('--flat-playlist');
-  } else if (!isInstagramPost) {
+  } else {
     args.push('--no-playlist');
   }
+
   if (cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be')) {
-    args.push('--extractor-args', 'youtube:player_client=android');
-  } else if (cleanUrl.includes('instagram.com')) {
-    args.push('--extractor-args', 'instagram:api_client=android');
+    args.push('--extractor-args', 'youtube:player_client=android,web');
   }
   args.push(cleanUrl);
 
@@ -653,25 +653,11 @@ app.post('/api/download', (req, res) => {
     args.push('--force-keyframes-at-cuts');
   }
 
-  // Speed Booster: Multi-threaded parallel downloading
-  const aria2Local = path.join(__dirname, 'bin', process.platform === 'win32' ? 'aria2c.exe' : 'aria2c');
-  const hasAria2 = fs.existsSync(aria2Local);
+  // Speed Booster: High-speed native parallel fragment downloading (robust, non-blocking)
   const useSpeedBooster = speedBooster !== false;
-
   if (useSpeedBooster) {
-    args.push('--concurrent-fragments', '16');
+    args.push('--concurrent-fragments', '5');
     args.push('--buffer-size', '1024K');
-    args.push('--http-chunk-size', '10M');
-
-    if (!cleanStart && !cleanEnd) {
-      if (hasAria2) {
-        args.push('--downloader', `aria2c:${aria2Local}`);
-        args.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --summary-interval=1');
-      } else if (process.platform !== 'win32') {
-        args.push('--downloader', 'aria2c');
-        args.push('--downloader-args', 'aria2c:-x 16 -s 16 -j 16 -k 1M --summary-interval=1');
-      }
-    }
   }
 
   // Format selection logic
@@ -735,7 +721,16 @@ app.post('/api/download', (req, res) => {
   });
 
   ytdlp.stderr.on('data', (data) => {
-    console.error(`[Job ${jobId} err]:`, data.toString());
+    const text = data.toString();
+    const job = jobs.get(jobId);
+    if (!job) return;
+
+    const percentMatch = text.match(/(\d+\.?\d*)%/);
+    if (percentMatch) {
+      job.percent = parseFloat(percentMatch[1]);
+      job.status = 'downloading';
+      job.statusText = 'Downloading stream...';
+    }
   });
 
   ytdlp.on('close', (code) => {
