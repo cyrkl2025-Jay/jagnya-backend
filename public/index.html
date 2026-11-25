@@ -330,22 +330,19 @@
         <button class="btn-close" onclick="closeEngineSettings()">✕</button>
       </div>
       <p class="engine-modal-desc">
-        Configure the backend engine server address (Wi-Fi IP or Cloudflare tunnel URL):
+        Permanent 24/7 cloud server works anywhere in the world on 4G, 5G, or Wi-Fi:
       </p>
       <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px;">
-        <button type="button" class="glass-action-btn paste-btn" style="text-align: left; padding: 8px 12px; font-size: 0.8rem;" onclick="selectPreset('https://petroleum-naturals-pushing-institute.trycloudflare.com')">
-          🌐 1-Click: Connect via 5G Mobile Data
-        </button>
-        <button type="button" class="glass-action-btn paste-btn" style="text-align: left; padding: 8px 12px; font-size: 0.8rem;" onclick="selectPreset('http://192.168.0.105:5000')">
-          📶 1-Click: Connect via Home Wi-Fi
+        <button type="button" class="glass-action-btn paste-btn" style="text-align: left; padding: 10px 14px; font-size: 0.85rem;" onclick="selectPreset('https://jagnya-backend.onrender.com')">
+          🌐 24/7 Global Cloud (Works Everywhere)
         </button>
       </div>
       <div style="margin-bottom: 12px;">
-        <input type="text" id="engineUrlInput" class="input-box" style="width: 100%; font-size: 0.9rem;" placeholder="e.g. https://... or http://192.168.0.105:5000" />
+        <input type="text" id="engineUrlInput" class="input-box" style="width: 100%; font-size: 0.9rem;" placeholder="https://jagnya-backend.onrender.com" />
       </div>
       <div style="display: flex; gap: 8px;">
         <button class="glass-action-btn analyze-btn" style="flex: 1; padding: 10px;" onclick="saveEngineSettings()">Save & Connect</button>
-        <button class="glass-action-btn paste-btn" style="padding: 10px 14px;" onclick="resetEngineSettings()">Reset</button>
+        <button class="glass-action-btn paste-btn" style="padding: 10px 14px;" onclick="resetEngineSettings()">Reset to Cloud</button>
       </div>
       <div id="engineTestStatus" style="margin-top: 10px; font-size: 0.85rem; color: #94a3b8; text-align: center;"></div>
     </div>

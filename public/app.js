@@ -2,22 +2,27 @@ let currentVideoData = null;
 let activePollingInterval = null;
 let deferredPrompt = null;
 
+const DEFAULT_ENGINE_URL = 'https://jagnya-backend.onrender.com';
 const CANDIDATE_URLS = [
   'https://jagnya-backend.onrender.com'
 ];
 
-let activeEngineBase = 'https://jagnya-backend.onrender.com';
+// Purge any obsolete local Wi-Fi IP or dead tunnels from storage
+try {
+  const saved = localStorage.getItem('downloader_engine_url');
+  if (saved && (!saved.includes('onrender.com') || saved.includes('192.168.') || saved.includes('localhost') || saved.includes('127.0.0.1') || saved.includes('trycloudflare'))) {
+    localStorage.removeItem('downloader_engine_url');
+  }
+} catch (e) {}
+
+let activeEngineBase = DEFAULT_ENGINE_URL;
 
 function getEngineBaseUrl() {
-  if (activeEngineBase) return activeEngineBase;
   const custom = localStorage.getItem('downloader_engine_url');
   if (custom && custom.trim().length > 0 && custom.includes('onrender.com')) {
     return custom.trim().replace(/\/+$/, '');
   }
-  if (window.location.protocol.startsWith('http')) {
-    return ''; // Relative path when served directly from Express
-  }
-  return CANDIDATE_URLS[0];
+  return DEFAULT_ENGINE_URL;
 }
 
 function getApiUrl(path) {
@@ -30,7 +35,7 @@ function getApiUrl(path) {
 async function testCandidate(url) {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), 35000); // 35s for free cloud wake-up
     const res = await fetch((url || '') + '/manifest.json', { signal: controller.signal });
     clearTimeout(timeoutId);
     return res.ok;
@@ -373,13 +378,25 @@ async function handleFetchInfo(event) {
   const carouselSection = document.getElementById('carouselSection');
   if (carouselSection) carouselSection.style.display = 'none';
 
+  let wakeTimer = null;
   try {
     const apiUrl = getApiUrl('/api/info');
+
+    wakeTimer = setTimeout(() => {
+      if (btnText) btnText.textContent = 'Waking Cloud (~20s)...';
+    }, 3500);
+
+    const controller = new AbortController();
+    const abortTimeout = setTimeout(() => controller.abort(), 60000);
+
     const res = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url })
+      body: JSON.stringify({ url }),
+      signal: controller.signal
     });
+    clearTimeout(abortTimeout);
+    clearTimeout(wakeTimer);
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {

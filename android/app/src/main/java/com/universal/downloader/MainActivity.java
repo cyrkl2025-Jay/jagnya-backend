@@ -159,7 +159,7 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                if (url.startsWith("file:///android_asset/") || url.contains("trycloudflare.com") || url.contains(":5000")) {
+                if (url.startsWith("file:///android_asset/") || url.contains("onrender.com") || url.contains("trycloudflare.com") || url.contains(":5000")) {
                     return false;
                 }
                 try {
